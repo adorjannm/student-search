@@ -62,6 +62,7 @@ def main(cfg: DictConfig):
             render_mode=cfg.train.render_mode,
             save_folder=cfg.save_folder,
             algorithm=cfg.train.algorithm,
+            tb_enabled=cfg.tensorboard.get("enabled", True),
             **env_kwargs,
         )
     elif cfg.eval.active:
@@ -69,6 +70,7 @@ def main(cfg: DictConfig):
             num_games=cfg.eval.games,
             render_mode=cfg.eval.render_mode,
             save_folder=cfg.save_folder,
+            tb_enabled=cfg.tensorboard.get("enabled", True),
             **env_kwargs,
         )
 

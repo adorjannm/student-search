@@ -21,5 +21,6 @@ eval:
   render_mode: "human"
 save_folder: "search_rescue_logs/"
 tensorboard:
-  active: false
+  active: false   # only for: "python -m ... tensorboard mode"
   port: 6006
+  enabled: true   # for: actually logging during train/eval

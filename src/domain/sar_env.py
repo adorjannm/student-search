@@ -526,7 +526,7 @@ class SearchAndRescueEnv(EnvBase):
         # Check if any victim is following this specific agent
         following_me = None
         for victim in self.victims:
-            if victim.state == VictimState.FOLLOW and victim.following is agent:
+            if victim.state == VictimState.FOLLOW and victim.following_agent is agent:
                 following_me = victim
                 break
 
