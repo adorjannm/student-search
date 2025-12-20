@@ -10,24 +10,37 @@ This project simulates a multi-agent search-and-rescue mission using the Petting
 
 ## Getting Started
 
+This README covers two main workflows:
+
+- Run (recommended): start the project via Docker (no local Python setup required).
+- Develop (optional): full local development workflow using a Python virtual environment (`.venv`).
+
 ### Prerequisites
 
-Ensure you have Python 3.13 installed and necessary packages for running PettingZoo and reinforcement learning frameworks.
+- Docker (for running in containers) or Python 3.13+ locally.
+- Git for cloning the repository.
 
-### Installation
+### Quickstart — Run with Docker (recommended)
 
-1. Clone the repository:
+Build the image (only if you need a local image):
 
-    ```bash
-    git clone https://gitlab.inf.elte.hu/student-projects-and-thesis/collective-intelligence/search.git
-    cd search
-    ```
+```bash
+docker build -t student-search:latest .
+```
 
-2. Install dependencies:
+Run training (mount logs directory):
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+```bash
+docker run --rm -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" student-search:latest
+```
+
+Run evaluation (Hydra overrides exposed via environment):
+
+```bash
+docker run --rm -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" student-search:latest eval.active=true
+```
+
+If you have `make` available, targets are optional convenience wrappers (see `Makefile`).
 
 ## Project Overview
 
@@ -67,31 +80,88 @@ The documentation includes:
 
 Run the following commands to start training or evaluating the environment:
 
-```bash
-# Training
-python main.py train=true
+### Training
 
-# Evaluation
-python main.py eval=true
+```bash
+docker run -v ./search_rescue_logs:/app/search_rescue_logs ghcr.io/elte-collective-intelligence/student-search:latest
+# or
+make run train # if you have Make installed
+```
+
+### Evaluation
+
+```bash
+docker run -v ./search_rescue_logs:/app/search_rescue_logs ghcr.io/elte-collective-intelligence/student-search:latest eval.active=true
+# or
+make run eval # if you have Make installed
 ```
 
  ![Run with 1 missing agent](images/Rescue1.mp4)
 
 ## Development
 
-To contribute or modify the project, ensure you follow the code style guidelines enforced by pre-commit hooks. Install pre-commit and run:
+This project recommends a local development environment using an isolated Python virtual environment (for example, `.venv`). The steps below are a complete developer workflow — move through them in order.
+
+### Clone & prepare
 
 ```bash
+git clone https://github.com/elte-collective-intelligence/student-search.git
+cd student-search
+
+# create and activate a local .venv
+python -m venv .venv # ensure Python 3.13+
+source .venv/bin/activate
+
+# upgrade pip and install runtime deps
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### Developer tooling
+
+```bash
+# install pre-commit hooks used by this repo
+pip install pre-commit
 pre-commit install
 ```
 
+### Linting & formatting
+
+```bash
+# run all pre-commit hooks locally
+pre-commit run --all-files
+
+# or run formatters/linters directly
+black .
+flake8
+```
+
+### Tests
+
+```bash
+pytest -q
+```
+
+### Run locally (examples)
+
+```bash
+# training
+python -m src.main train.active=true
+
+# evaluation (human render)
+python -m src.main eval.active=true eval.render_mode=human
+```
+
+Notes:
+
+- The project uses Hydra for configuration; most runtime parameters can be overridden on the command line (e.g., `python -m src.main env.num_rescuers=8`).
+- Logging/tensorboard: by default logs are saved to the `search_rescue_logs/` directory (configurable in `conf/config.yaml`).
+
 ## Team Members
 
-Adorján Nagy-Mohos, d5vd5e@inf.elte.hu
-
-Máté Kovács, u5bky4@inf.elte.hu
-
-Sándor Baranyi, ct9xfj@inf.elte.hu
+- Adorján Nagy-Mohos — [d5vd5e@inf.elte.hu](mailto:d5vd5e@inf.elte.hu)
+- Máté Kovács — [u5bky4@inf.elte.hu](mailto:u5bky4@inf.elte.hu)
+- Sándor Baranyi — [ct9xfj@inf.elte.hu](mailto:ct9xfj@inf.elte.hu)
 
 ## License
 
