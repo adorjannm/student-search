@@ -8,6 +8,8 @@ from pettingzoo import ParallelEnv
 
 from torchrl.envs import PettingZooWrapper, TransformedEnv, RewardSum
 
+from src.seed_utils import set_seed
+
 
 class SearchAndRescueEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "search_rescue_v2"}
@@ -145,6 +147,9 @@ class SearchAndRescueEnv(ParallelEnv):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.steps = 0
+
+        if seed is not None:
+            set_seed(seed)
 
         # Apply pending tree count update (from curriculum learning)
         # Note: We don't change obs_dim since it's fixed to max_trees
