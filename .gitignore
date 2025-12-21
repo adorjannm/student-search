@@ -60,3 +60,5 @@ wandb/
 .python-version
 
 search_rescue_logs/
+
+images/*.gif
