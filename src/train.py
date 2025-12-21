@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import torch
 from torchrl.envs import check_env_specs
@@ -284,10 +282,7 @@ def train(
     pbar.close()
 
     # Save model in the run directory
-    model_path = (
-        run_ctx.run_dir
-        / f"{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
-    )
+    model_path = run_ctx.run_dir / f"{env.base_env.metadata['name']}.pt"
     model_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save environment configuration for evaluation
