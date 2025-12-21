@@ -19,6 +19,7 @@ The training follows the standard PPO algorithm with multi-agent extensions:
 
 import time
 
+import numpy as np
 import torch
 from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
@@ -29,6 +30,14 @@ import tqdm
 from src.models import make_policy, make_critic
 from src.sar_env import make_env
 from src.logger import RunContext, TensorboardLogger
+from src.curriculum import CurriculumScheduler
+
+
+def _get_metrics_env(env):
+    base = getattr(env, "base_env", None)
+    while base is not None and not hasattr(base, "pop_episode_metrics"):
+        base = getattr(base, "base_env", getattr(base, "_env", None))
+    return base if base is not None else env
 
 
 def train(
@@ -40,6 +49,10 @@ def train(
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
     enable_logging: bool = True,
+    curriculum_enabled: bool = False,
+    curriculum_min_trees: int = 0,
+    curriculum_max_trees: int = 8,
+    curriculum_num_stages: int = 5,
     **env_kwargs,
 ) -> None:
     """
@@ -138,6 +151,25 @@ def train(
     if enable_logging:
         print(f"TensorBoard logging enabled. Log directory: {run_ctx.tb_run_dir}")
 
+    # Initialize curriculum scheduler if enabled
+    curriculum = None
+    if curriculum_enabled:
+        # Calculate iterations based on frames_per_batch
+        total_iterations = steps // frames_per_batch
+        curriculum = CurriculumScheduler(
+            min_trees=curriculum_min_trees,
+            max_trees=curriculum_max_trees,
+            num_stages=curriculum_num_stages,
+            total_iterations=total_iterations,
+        )
+        # Set initial trees and max_trees for fixed observation space
+        env_kwargs["num_trees"] = curriculum.get_num_trees()
+        env_kwargs["max_trees"] = curriculum_max_trees
+        print(f"Curriculum learning enabled: {curriculum}")
+        print(f"  Stages: {curriculum.num_stages}")
+        print(f"  Trees progression: {curriculum.stage_trees}")
+        print(f"  Iterations per stage: {curriculum.iterations_per_stage}")
+
     # Create environment
     env_kwargs["seed"] = seed
     env = make_env(device=device, **env_kwargs)
@@ -154,8 +186,11 @@ def train(
 
     # 1. Policy Network (Actor) - Decentralized
     # Input: ("agents", "observation") -> [Batch, n_agents, obs_dim]
-    # Output: ("agents", "loc"), ("agents", "scale")
-    policy = make_policy(env, num_rescuers=num_agents, device=device)
+    # Output: ("agents", "loc"), ("agents", "scale") for continuous OR ("agents", "logits") for discrete
+    is_discrete = not env.base_env.is_continuous
+    policy = make_policy(
+        env, num_rescuers=num_agents, device=device, discrete=is_discrete
+    )
 
     # 2. Value Network (Critic) - Centralized
     # Input: All observations concatenated
@@ -201,21 +236,29 @@ def train(
     total_frames = 0
 
     # Log hyperparameters
-    logger.log_dict(
-        "hyperparameters",
-        {
-            "learning_rate": learning_rate,
-            "num_epochs": num_epochs,
-            "frames_per_batch": frames_per_batch,
-            "batch_size": batch_size,
-            "total_steps": steps,
-            "seed": seed,
-            "num_agents": num_agents,
-        },
-        step=0,
-    )
+    hparams = {
+        "learning_rate": learning_rate,
+        "num_epochs": num_epochs,
+        "frames_per_batch": frames_per_batch,
+        "batch_size": batch_size,
+        "total_steps": steps,
+        "seed": seed,
+        "num_agents": num_agents,
+    }
+    if curriculum is not None:
+        hparams.update(
+            {
+                "curriculum_enabled": True,
+                "curriculum_min_trees": curriculum.min_trees,
+                "curriculum_max_trees": curriculum.max_trees,
+                "curriculum_num_stages": curriculum.num_stages,
+            }
+        )
+    logger.log_dict("hyperparameters", hparams, step=0)
 
     for batch in collector:
+        metrics_env = _get_metrics_env(env)
+
         # 1. Prepare Batch
         # Add 'terminated' if missing (older versions of wrappers might miss it)
         if ("agents", "terminated") not in batch.keys(include_nested=True):
@@ -245,6 +288,13 @@ def train(
         for _ in range(num_epochs):
             for _ in range(frames_per_batch // minibatch_size):
                 subdata = replay_buffer.sample(minibatch_size)
+                # Ensure sampled minibatch tensors are on the training device
+                try:
+                    subdata = subdata.to(device)
+                except AttributeError:
+                    # Fallback: if `.to(device)` is unavailable, assume `subdata` is already on a compatible
+                    # device or that `loss_module` handles device placement internally, so we skip adjustment.
+                    pass
                 loss_vals = loss_module(subdata)
 
                 loss_value = (
@@ -265,10 +315,27 @@ def train(
                 avg_loss_total += loss_value.item()
                 num_updates += 1
 
-        # 3. Logging
+        # 3. Curriculum Progression
+        if curriculum is not None:
+            stage_changed = curriculum.step()
+            if stage_changed:
+                new_trees = curriculum.get_num_trees()
+                print(
+                    f"\n[Curriculum] Advanced to stage {curriculum.get_stage()}: {new_trees} trees"
+                )
+                # Update environment's tree count (takes effect on next episode reset)
+                metrics_env.set_num_trees(new_trees)
+                # Log curriculum change
+                logger.log_dict("curriculum", curriculum.get_info(), step=iteration)
+
+        # 4. Logging
         pbar.update(batch.numel())
         total_frames += batch.numel()
         iteration += 1
+
+        # Log curriculum state each iteration
+        if curriculum is not None:
+            logger.log_dict("curriculum", curriculum.get_info(), step=iteration)
 
         # Log training losses
         if num_updates > 0:
@@ -297,6 +364,23 @@ def train(
             logger.log_scalar("train/episode_reward", mean_reward, step=iteration)
             logger.log_scalar("train/total_frames", total_frames, step=iteration)
 
+            # Pull environment metrics for the just-finished episodes
+            metrics = metrics_env.pop_episode_metrics()
+            if metrics:
+                # Aggregate across episodes that finished in this batch
+                rescues_pct = np.mean([m["rescues_pct"] for m in metrics])
+                collisions = np.mean([m["collisions"] for m in metrics])
+                coverage = np.mean([m["coverage_cells"] for m in metrics])
+                logger.log_dict(
+                    "train/episode_metrics",
+                    {
+                        "rescues_pct": rescues_pct,
+                        "collisions": collisions,
+                        "coverage_cells": coverage,
+                    },
+                    step=iteration,
+                )
+
         collector.update_policy_weights_()
 
     pbar.close()
@@ -317,6 +401,7 @@ def train(
         "max_cycles": env.base_env.max_steps,
         "continuous_actions": env.base_env.is_continuous,
         "vision_radius": env.base_env.vision_radius,
+        "randomize_safe_zones": env.base_env.randomize_safe_zones,
     }
 
     torch.save(

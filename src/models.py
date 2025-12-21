@@ -21,6 +21,7 @@ import torch
 from torch import nn
 from tensordict.nn import TensorDictModule
 from torchrl.modules import MultiAgentMLP, ProbabilisticActor, TanhNormal, ValueOperator
+from torch.distributions import Categorical
 
 
 class SplitLayer(nn.Module):
@@ -55,7 +56,10 @@ class SplitLayer(nn.Module):
 
 
 def make_policy(
-    env, num_rescuers: int, device: Union[torch.device, str] = "cpu"
+    env,
+    num_rescuers: int,
+    device: Union[torch.device, str] = "cpu",
+    discrete: bool = False,
 ) -> ProbabilisticActor:
     """
     Create a probabilistic policy network (actor) for multi-agent training.
@@ -108,21 +112,67 @@ def make_policy(
         # Helper to split output into mean and log_std for sampling
         nn.Unflatten(-1, (2, env.action_spec["agents", "action"].shape[-1])),
     ).to(device)
+    if discrete:
+        # Discrete action policy
+        policy_net = MultiAgentMLP(
+            n_agent_inputs=env.observation_spec["agents", "observation"].shape[-1],
+            n_agent_outputs=5,  # 5 discrete actions
+            n_agents=num_rescuers,
+            centralised=False,  # strictly local
+            share_params=True,  # Homogenous agents share weights
+            device=device,
+            depth=2,
+            num_cells=64,
+            activation_class=torch.nn.Tanh,
+        ).to(device)
 
-    policy_module = TensorDictModule(
-        module=nn.Sequential(policy_net, SplitLayer()),
-        in_keys=[("agents", "observation")],
-        out_keys=[("agents", "loc"), ("agents", "scale")],
-    )
+        policy_module = TensorDictModule(
+            module=policy_net,
+            in_keys=[("agents", "observation")],
+            out_keys=[("agents", "logits")],
+        )
 
-    return ProbabilisticActor(
-        module=policy_module,
-        spec=env.action_spec,
-        in_keys=[("agents", "loc"), ("agents", "scale")],
-        out_keys=[env.action_key],
-        distribution_class=TanhNormal,
-        return_log_prob=True,
-    )
+        return ProbabilisticActor(
+            module=policy_module,
+            spec=env.action_spec,
+            in_keys=[("agents", "logits")],
+            out_keys=[env.action_key],
+            distribution_class=Categorical,
+            return_log_prob=True,
+        )
+    else:
+        # Continuous action policy
+        policy_net = nn.Sequential(
+            MultiAgentMLP(
+                n_agent_inputs=env.observation_spec["agents", "observation"].shape[-1],
+                n_agent_outputs=env.action_spec["agents", "action"].shape[-1]
+                * 2,  # Mean + Std
+                n_agents=num_rescuers,
+                centralised=False,  # strictly local
+                share_params=True,  # Homogenous agents share weights
+                device=device,
+                depth=2,
+                num_cells=64,
+                activation_class=torch.nn.Tanh,
+            ),
+            # Helper to split output into mean and log_std for sampling
+            nn.Unflatten(-1, (2, env.action_spec["agents", "action"].shape[-1])),
+        ).to(device)
+
+        policy_module = TensorDictModule(
+            module=nn.Sequential(policy_net, SplitLayer()),
+            in_keys=[("agents", "observation")],
+            out_keys=[("agents", "loc"), ("agents", "scale")],
+        )
+
+        return ProbabilisticActor(
+            module=policy_module,
+            spec=env.action_spec,
+            in_keys=[("agents", "loc"), ("agents", "scale")],
+            out_keys=[env.action_key],
+            distribution_class=TanhNormal,
+            return_log_prob=True,
+        )
 
 
 def make_critic(

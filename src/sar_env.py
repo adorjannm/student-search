@@ -127,10 +127,14 @@ class SearchAndRescueEnv(ParallelEnv):
         num_trees: int = 5,
         num_safe_zones: int = 4,
         max_cycles: int = 200,
-        continuous_actions: bool = False,
+        continuous_actions: bool = True,
         vision_radius: float = 0.5,
+        randomize_safe_zones: bool = False,
         seed: Optional[int] = None,
         render_mode: Optional[str] = None,
+        max_trees: Optional[
+            int
+        ] = None,  # For curriculum learning - fixes obs space size
     ):
         """
         Initialize the Search and Rescue environment.
@@ -168,7 +172,14 @@ class SearchAndRescueEnv(ParallelEnv):
         self.render_mode = render_mode
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
-        self.seed = seed
+        self.randomize_safe_zones = randomize_safe_zones
+
+        # For curriculum learning: use max_trees for obs space size, pad observations
+        self.max_trees = max_trees if max_trees is not None else num_trees
+
+        # Initialize random number generator
+        self._seed = seed
+        self.np_random = np.random.RandomState(seed)
 
         # Parameters
         self.world_size = 2.0  # [-1, 1] range
@@ -184,8 +195,8 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_names = [f"victim_{i}" for i in range(num_victims)]
 
         # Assign types cyclically
-        self.victim_types = [i % 4 for i in range(num_victims)]
-        self.safe_zone_types = [0, 1, 2, 3]  # TL, TR, BL, BR
+        self.victim_types = [i % self.num_safe_zones for i in range(num_victims)]
+        # safe_zone_types will be set in reset() based on randomize_safe_zones
 
         # Colors for rendering
         self.type_colors = {
@@ -195,24 +206,31 @@ class SearchAndRescueEnv(ParallelEnv):
             3: (255, 255, 50),  # Yellow (D)
         }
 
-        # Action Space: Continuous acceleration (dx, dy)
-        self.action_spaces = {
-            agent: spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
-            for agent in self.agents
-        }
+        # Action Space: Either Discrete or Continuous
+        if self.is_continuous:
+            # Continuous acceleration (dx, dy)
+            self.action_spaces = {
+                agent: spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+                for agent in self.agents
+            }
+        else:
+            # Discrete actions: 0=noop, 1=up, 2=down, 3=left, 4=right
+            self.action_spaces = {agent: spaces.Discrete(5) for agent in self.agents}
 
-        # Observation Space Calculation
+        # Observation Space Calculation (Partial Observability with Vision Masking)
         # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
-        #  SafeZones(4 * 3: rel_x, rel_y, type_idx),
-        #  Trees(N * 2: rel_x, rel_y),
-        #  Victims(N * 3: rel_x, rel_y, type_idx)]
+        #  SafeZones(4 * 3: rel_x, rel_y, type_idx) - masked if occluded/far,
+        #  Trees(max_trees * 2: rel_x, rel_y) - masked if occluded/far OR beyond num_trees,
+        #  Victims(N * 3: rel_x, rel_y, type_idx) - masked if occluded/far/saved]
+        # Note: All spatial entities use visibility masking based on vision_radius and occlusion
         # Note: Other rescuers removed from observation to focus learning on task
+        # Note: For curriculum learning, obs space uses max_trees, unused slots are masked
 
         self.obs_dim = (
             4
             + num_rescuers  # Agent ID one-hot encoding
             + (self.num_safe_zones * 3)
-            + (self.num_trees * 2)
+            + (self.max_trees * 2)  # Use max_trees for fixed obs dimension
             + (self.num_victims * 3)
         )
 
@@ -225,6 +243,47 @@ class SearchAndRescueEnv(ParallelEnv):
 
         self.screen = None
         self.clock = None
+
+        # Metrics state (reset each episode)
+        self._cell_size = 0.05
+        self._episode_counter = 0
+        self._visited_cells = []
+        self._collision_events = 0
+        self._completed_episode_metrics = []
+
+    def _reset_metrics(self) -> None:
+        """Reset per-episode metric trackers."""
+        self._visited_cells = [set() for _ in range(self.num_rescuers)]
+        self._collision_events = 0
+
+    def _hash_pos(self, pos: np.ndarray) -> tuple[int, int]:
+        return tuple(np.floor(pos / self._cell_size).astype(int))
+
+    def pop_episode_metrics(self) -> list[dict]:
+        """Return and clear metrics for episodes that completed since last call."""
+        metrics = self._completed_episode_metrics
+        self._completed_episode_metrics = []
+        return metrics
+
+    def set_num_trees(self, num_trees: int) -> None:
+        """
+        Update the number of trees (occluders) in the environment.
+
+        This is useful for curriculum learning where difficulty increases
+        by adding more occluders over time. Changes take effect on next reset().
+
+        Note: This only updates the target tree count. The actual tree positions
+        are created during reset(), so changes won't take effect until the
+        current episode ends and a new one begins.
+
+        Args:
+            num_trees: New number of trees to use
+        """
+        # Store the target tree count
+        # We don't update obs_dim or observation_spaces here because that would
+        # cause dimension mismatch errors during the current episode.
+        # Instead, we wait for the next reset() to apply the changes.
+        self._pending_num_trees = num_trees
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[dict] = None
@@ -253,29 +312,56 @@ class SearchAndRescueEnv(ParallelEnv):
             required by the PettingZoo API to handle agent removal on termination.
         """
         self.steps = 0
+
+        # Apply pending tree count update (from curriculum learning)
+        # Note: We don't change obs_dim since it's fixed to max_trees
+        if hasattr(self, "_pending_num_trees"):
+            self.num_trees = self._pending_num_trees
+            delattr(self, "_pending_num_trees")
+
+        # Handle seeding
         if seed is not None:
-            np.random.seed(seed)
+            self._seed = seed
+            self.np_random = np.random.RandomState(seed)
 
         # Reset Agents list (required by PettingZoo API)
         self.agents = self.possible_agents[:]
 
-        # Positions: Rescuers, Victims, Trees, SafeZones
-        self.rescuer_pos = np.random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
+        # Metrics state (reset each episode)
+        self._episode_counter += 1
+        self._reset_metrics()
+
+        # Positions: Rescuers, Victims, Trees, SafeZones (using self.np_random)
+        self.rescuer_pos = self.np_random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
         self.rescuer_vel = np.zeros((self.num_rescuers, 2))
 
-        self.victim_pos = np.random.uniform(-0.8, 0.8, (self.num_victims, 2))
+        self.victim_pos = self.np_random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
 
-        self.tree_pos = np.random.uniform(-0.8, 0.8, (self.num_trees, 2))
+        self.tree_pos = self.np_random.uniform(-0.8, 0.8, (self.num_trees, 2))
 
-        # Safe zones at corners
-        self.safezone_pos = np.array(
-            [[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]]
-        )
+        # Safe zones: randomized or at fixed corners
+        if self.randomize_safe_zones:
+            # Randomize positions within the world bounds
+            self.safezone_pos = self.np_random.uniform(
+                -0.95, 0.95, (self.num_safe_zones, 2)
+            )
+
+            # Shuffle types to randomize which zone accepts which victim type
+            # Keep types as 0,1,2,3 but in random order
+            self.safe_zone_types = list(range(self.num_safe_zones))
+            self.np_random.shuffle(self.safe_zone_types)
+        else:
+            # Fixed positions at corners (default behavior)
+            self.safezone_pos = np.array(
+                [[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]]
+            )
+            # Types stay in original order
+            self.safe_zone_types = [0, 1, 2, 3]
 
         # Track previous distances for delta-based shaping
         self.prev_agent_victim_dists = self._compute_agent_victim_dists()
@@ -403,22 +489,30 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (Global knowledge assumed for static zones)
+            # 3. Safe Zones (with visibility masking)
             for sz_i in range(self.num_safe_zones):
-                rel_pos = self.safezone_pos[sz_i] - my_pos
-                # We append the numeric type (0-3) so the network knows which zone is which
-                obs_vec.extend(
-                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
-                )
-
-            # 4. Trees
-            for t_i in range(self.num_trees):
                 if self._is_visible(
+                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
+                ):
+                    rel_pos = self.safezone_pos[sz_i] - my_pos
+                    # We append the numeric type (0-3) so the network knows which zone is which
+                    obs_vec.extend(
+                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                    )
+                else:
+                    # Masked: not visible due to distance or occlusion
+                    obs_vec.extend([0.0, 0.0, -1.0])
+
+            # 4. Trees (pad to max_trees for curriculum learning)
+            for t_i in range(self.max_trees):
+                if t_i < self.num_trees and self._is_visible(
                     my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
                     obs_vec.extend(self.tree_pos[t_i] - my_pos)
                 else:
-                    obs_vec.extend([0.0, 0.0])  # Masked
+                    obs_vec.extend(
+                        [0.0, 0.0]
+                    )  # Masked (invisible, occluded, or beyond num_trees)
 
             # 5. Victims
             for v_i in range(self.num_victims):
@@ -487,6 +581,22 @@ class SearchAndRescueEnv(ParallelEnv):
                 continue
 
             action = actions[agent]
+
+            # Convert discrete action to continuous if needed
+            if not self.is_continuous:
+                # Discrete actions: 0=noop, 1=up, 2=down, 3=left, 4=right
+                if isinstance(action, np.ndarray):
+                    action = int(action)
+
+                action_map = {
+                    0: np.array([0.0, 0.0]),  # noop
+                    1: np.array([0.0, 1.0]),  # up
+                    2: np.array([0.0, -1.0]),  # down
+                    3: np.array([-1.0, 0.0]),  # left
+                    4: np.array([1.0, 0.0]),  # right
+                }
+                action = action_map.get(action, np.array([0.0, 0.0]))
+
             # Physics
             self.rescuer_vel[i] = self.rescuer_vel[i] * 0.8 + action * 0.1
             speed = np.linalg.norm(self.rescuer_vel[i])
@@ -513,6 +623,8 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_tree)
                 min_dist = self.agent_size + self.tree_radius
                 if dist < min_dist:
+                    # Track collision metric
+                    self._collision_events += 1
                     # Tree collision penalty
                     rewards[agent] -= 1
                     # Compute penetration depth and normal
@@ -539,6 +651,8 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_other)
 
                 if dist < agent_repulsion_radius and dist > 1e-6:
+                    # Track collision between agents (count once per pair)
+                    self._collision_events += 1
                     # Apply soft repulsion force inversely proportional to distance
                     repulsion_force = (
                         repulsion_strength * (agent_repulsion_radius - dist) / dist
@@ -604,13 +718,13 @@ class SearchAndRescueEnv(ParallelEnv):
                 direction = (assigned_pos - self.victim_pos[v_i]) / (
                     np.linalg.norm(assigned_pos - self.victim_pos[v_i]) + 1e-6
                 )
-                follow_force = 0.02
+                follow_force = 0.04
                 self.victim_vel[v_i] = (
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
             else:
-                # Simple Brownian motion
-                noise = np.random.randn(2) * 0.0075
+                # Simple Brownian motion (using seeded RNG)
+                noise = self.np_random.randn(2) * 0.0075
                 self.victim_vel[v_i] = self.victim_vel[v_i] * 0.8 + noise
 
             self.victim_pos[v_i] += self.victim_vel[v_i]
@@ -618,6 +732,10 @@ class SearchAndRescueEnv(ParallelEnv):
 
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
+
+        # Track coverage each step (after physics updates)
+        for i, agent in enumerate(self.agents):
+            self._visited_cells[i].add(self._hash_pos(self.rescuer_pos[i].copy()))
 
         self.steps += 1
 
@@ -628,6 +746,25 @@ class SearchAndRescueEnv(ParallelEnv):
         elif self.steps >= self.max_steps:
             truncations = {a: True for a in self.agents}
             self.agents = []
+
+        if not self.agents:
+            # Episode ended; aggregate metrics
+            rescues_pct = (
+                100.0
+                * float(np.count_nonzero(self.victim_saved))
+                / max(1, self.num_victims)
+            )
+            coverage_cells = len(set().union(*self._visited_cells))
+            collisions = self._collision_events
+            self._completed_episode_metrics.append(
+                {
+                    "episode": self._episode_counter,
+                    "rescues_pct": rescues_pct,
+                    "collisions": collisions,
+                    "coverage_cells": coverage_cells,
+                }
+            )
+            self._reset_metrics()
 
         return self._get_obs(), rewards, terminations, truncations, infos
 
@@ -681,11 +818,9 @@ class SearchAndRescueEnv(ParallelEnv):
             color = self.type_colors[type_idx]
 
             s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            s.fill((*color, 50))
+            pygame.draw.circle(s, (*color, 50), (r, r), r)
             self.screen.blit(s, (s_pos[0] - r, s_pos[1] - r))
-            pygame.draw.rect(
-                self.screen, color, (s_pos[0] - r, s_pos[1] - r, r * 2, r * 2), 2
-            )
+            pygame.draw.circle(self.screen, color, s_pos, r, 2)
 
         # Draw Trees
         for pos in self.tree_pos:
@@ -743,6 +878,13 @@ class SearchAndRescueEnv(ParallelEnv):
         """
         if self.screen:
             pygame.quit()
+
+    def _get_matching_zone_idx(self, victim_type: int) -> Optional[int]:
+        """Find the safe zone index that accepts the given victim type."""
+        for zone_idx, zone_type in enumerate(self.safe_zone_types):
+            if zone_type == victim_type:
+                return zone_idx
+        return None
 
     def _compute_agent_victim_dists(self) -> list[float]:
         """
@@ -811,6 +953,12 @@ class SearchAndRescueEnv(ParallelEnv):
                 rewards[agent] += delta * 0.1
         self.prev_agent_victim_dists = current_dists
 
+        # Small penalty for low velocity (encourage movement when victims aren't all saved)
+        for i, agent in enumerate(self.agents):
+            speed = np.linalg.norm(self.rescuer_vel[i])
+            if speed < 0.01:  # Nearly stationary
+                rewards[agent] -= 0.05
+
         # Check safe zones
         saved_count = 0
         for v_i in range(self.num_victims):
@@ -819,11 +967,15 @@ class SearchAndRescueEnv(ParallelEnv):
                 continue
 
             v_pos = self.victim_pos[v_i]
-            v_type_idx = self.victim_types[v_i]
+            v_type = self.victim_types[v_i]
 
-            # Find pos of safe zone with matching type
-            target_zone_pos = self.safezone_pos[v_type_idx]
+            # Find safe zone with matching type (not index!)
+            target_zone_idx = self._get_matching_zone_idx(v_type)
+            if target_zone_idx is None:
+                # Should not happen if num_safe_zones >= max victim types
+                continue
 
+            target_zone_pos = self.safezone_pos[target_zone_idx]
             dist_to_zone = np.linalg.norm(v_pos - target_zone_pos)
 
             # Victim got saved
@@ -831,30 +983,11 @@ class SearchAndRescueEnv(ParallelEnv):
                 self.victim_saved[v_i] = True
                 saved_count += 1
 
-                # Reward the assigned agent (who escorted the victim)
-                # If no assignment, fall back to closest agent
+                # Reward ONLY the agent that was assigned to (escorting) this victim
                 assigned_agent_idx = self.victim_assignments[v_i]
                 if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
-                    # Primary reward to assigned agent who did the work
+                    # Reward only the assigned agent who did the work
                     rewards[self.agents[assigned_agent_idx]] += 100.0
-                else:
-                    # Fallback: reward closest agent
-                    min_dist = float("inf")
-                    closest_agent = None
-                    for j, a in enumerate(self.agents):
-                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_agent = a
-                    if closest_agent is not None:
-                        rewards[closest_agent] += 100.0
-
-                # Small bonus to nearby assisting agents (within follow radius)
-                for j, a in enumerate(self.agents):
-                    if j != assigned_agent_idx:
-                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
-                        if dist < self.follow_radius:
-                            rewards[a] += 10.0  # 10% bonus for assisting
 
         # Individual credit: reward assigned agent for escorting victim toward safe zone
         for v_i in range(self.num_victims):
@@ -864,11 +997,19 @@ class SearchAndRescueEnv(ParallelEnv):
                 # Only reward the assigned agent (stronger signal for credit assignment)
                 if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
                     agent = self.agents[assigned_agent_idx]
-                    dist_to_zone = np.linalg.norm(
-                        self.victim_pos[v_i] - self.safezone_pos[self.victim_types[v_i]]
-                    )
-                    # Reward proportional to inverse distance (closer to goal = higher reward)
-                    rewards[agent] += 1.0 / (dist_to_zone + 1e-6)
+
+                    # Find the correct safe zone by matching type
+                    v_type = self.victim_types[v_i]
+                    target_zone_idx = self._get_matching_zone_idx(v_type)
+
+                    if target_zone_idx is not None:
+                        dist_to_zone = np.linalg.norm(
+                            self.victim_pos[v_i] - self.safezone_pos[target_zone_idx]
+                        )
+                        # Reward proportional to inverse distance (closer to goal = higher reward)
+                        # Capped to prevent infinite reward when very close
+                        proximity_reward = min(1.0 / (dist_to_zone + 0.1), 10.0)
+                        rewards[agent] += proximity_reward
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
@@ -933,7 +1074,7 @@ def make_env(device: Union[torch.device, str] = "cpu", **kwargs) -> TransformedE
     """
     env = SearchAndRescueEnv(**kwargs)
     group_map = {"agents": env.possible_agents}
-    env = PettingZooWrapper(env, group_map=group_map, use_mask=True)
+    env = PettingZooWrapper(env, group_map=group_map, use_mask=True, device=device)
     env = TransformedEnv(
         env,
         RewardSum(in_keys=[env.reward_key], out_keys=[("agents", "episode_reward")]),
