@@ -395,6 +395,9 @@ class SearchAndRescueEnv(ParallelEnv):
             If the target position exactly matches a tree position, it is
             considered visible (to handle edge cases where a tree is the target).
         """
+        # If vision radius is zero, nothing is visible
+        if self.vision_radius == 0.0:
+            return False
         dist = np.linalg.norm(target_pos - observer_pos)
         if dist > self.vision_radius:
             return False
