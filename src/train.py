@@ -71,7 +71,6 @@ def train(
         print(f"  Iterations per stage: {curriculum.iterations_per_stage}")
 
     # Create environment
-    env_kwargs["seed"] = seed
     env = make_env(device=device, **env_kwargs)
 
     # Check environment specs
@@ -81,7 +80,6 @@ def train(
     print(f"Starting MARL training on {env.base_env.metadata['name']}.")
     print(f"Number of agents: {num_agents}")
     print(f"Observation shape: {env.observation_spec['agents', 'observation'].shape}")
-    # print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
     # 1. Policy Network (Actor) - Decentralized
