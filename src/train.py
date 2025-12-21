@@ -12,6 +12,7 @@ from src.models import make_policy, make_critic
 from src.sar_env import make_env
 from src.logger import RunContext, TensorboardLogger
 from src.curriculum import CurriculumScheduler
+from src.seed_utils import set_seed
 
 
 def _get_metrics_env(env):
@@ -39,6 +40,10 @@ def train(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+
+    # Set random seeds for reproducibility
+    set_seed(seed, deterministic=True)
+    print(f"Random seed set to: {seed}")
 
     # Setup logging
     run_ctx = RunContext(base_dir=save_folder, run_name=None, create_subdirs=True)
