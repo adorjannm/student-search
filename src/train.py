@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import torch
 from torchrl.envs import check_env_specs
@@ -12,6 +10,7 @@ from src.models import make_policy, make_critic
 from src.sar_env import make_env
 from src.logger import RunContext, TensorboardLogger
 from src.curriculum import CurriculumScheduler
+from src.seed_utils import set_seed
 
 
 def _get_metrics_env(env):
@@ -40,6 +39,10 @@ def train(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    # Set random seeds for reproducibility
+    set_seed(seed, deterministic=True)
+    print(f"Random seed set to: {seed}")
+
     # Setup logging
     run_ctx = RunContext(base_dir=save_folder, run_name=None, create_subdirs=True)
     logger = TensorboardLogger.create(ctx=run_ctx, enabled=enable_logging)
@@ -66,7 +69,6 @@ def train(
         print(f"  Iterations per stage: {curriculum.iterations_per_stage}")
 
     # Create environment
-    env_kwargs["seed"] = seed
     env = make_env(device=device, **env_kwargs)
 
     # Check environment specs
@@ -76,7 +78,6 @@ def train(
     print(f"Starting MARL training on {env.base_env.metadata['name']}.")
     print(f"Number of agents: {num_agents}")
     print(f"Observation shape: {env.observation_spec['agents', 'observation'].shape}")
-    # print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
     # 1. Policy Network (Actor) - Decentralized
@@ -281,10 +282,7 @@ def train(
     pbar.close()
 
     # Save model in the run directory
-    model_path = (
-        run_ctx.run_dir
-        / f"{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
-    )
+    model_path = run_ctx.run_dir / f"{env.base_env.metadata['name']}.pt"
     model_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save environment configuration for evaluation

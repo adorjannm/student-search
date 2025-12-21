@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from src.sar_env import SearchAndRescueEnv
+from src.seed_utils import set_seed
 
 
 # =============================================================================
@@ -35,8 +36,10 @@ def make_env():
     to configuration changes.
     """
 
-    def _make(**kwargs) -> SearchAndRescueEnv:
+    def _make(seed=None, **kwargs) -> SearchAndRescueEnv:
         # Explicitly set continuous_actions=True unless overridden by caller
+        if seed is not None:
+            set_seed(seed)
         kwargs.setdefault("continuous_actions", True)
         return SearchAndRescueEnv(render_mode=None, **kwargs)
 

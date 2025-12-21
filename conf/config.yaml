@@ -19,7 +19,6 @@ train:
   eval_freq: 500
   batch_size: 2048
   n_epochs: 40
-  seed: 0
   render_mode: null
   learning_rate: 0.003
 eval:
@@ -27,6 +26,7 @@ eval:
   games: 10
   render_mode: "human"
 save_folder: "search_rescue_logs/"
+seed: 0
 tensorboard:
   active: false
   port: 6006

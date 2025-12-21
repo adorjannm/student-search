@@ -8,6 +8,8 @@ from pettingzoo import ParallelEnv
 
 from torchrl.envs import PettingZooWrapper, TransformedEnv, RewardSum
 
+from src.seed_utils import set_seed
+
 
 class SearchAndRescueEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "search_rescue_v2"}
@@ -22,7 +24,6 @@ class SearchAndRescueEnv(ParallelEnv):
         continuous_actions: bool = True,
         vision_radius: float = 0.5,
         randomize_safe_zones: bool = False,
-        seed: Optional[int] = None,
         render_mode: Optional[str] = None,
         max_trees: Optional[
             int
@@ -39,10 +40,6 @@ class SearchAndRescueEnv(ParallelEnv):
 
         # For curriculum learning: use max_trees for obs space size, pad observations
         self.max_trees = max_trees if max_trees is not None else num_trees
-
-        # Initialize random number generator
-        self._seed = seed
-        self.np_random = np.random.RandomState(seed)
 
         # Parameters
         self.world_size = 2.0  # [-1, 1] range
@@ -151,16 +148,14 @@ class SearchAndRescueEnv(ParallelEnv):
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.steps = 0
 
+        if seed is not None:
+            set_seed(seed)
+
         # Apply pending tree count update (from curriculum learning)
         # Note: We don't change obs_dim since it's fixed to max_trees
         if hasattr(self, "_pending_num_trees"):
             self.num_trees = self._pending_num_trees
             delattr(self, "_pending_num_trees")
-
-        # Handle seeding
-        if seed is not None:
-            self._seed = seed
-            self.np_random = np.random.RandomState(seed)
 
         # Reset Agents list (required by PettingZoo API)
         self.agents = self.possible_agents[:]
@@ -169,30 +164,28 @@ class SearchAndRescueEnv(ParallelEnv):
         self._episode_counter += 1
         self._reset_metrics()
 
-        # Positions: Rescuers, Victims, Trees, SafeZones (using self.np_random)
-        self.rescuer_pos = self.np_random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
+        # Positions: Rescuers, Victims, Trees, SafeZones (using global np.random)
+        self.rescuer_pos = np.random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
         self.rescuer_vel = np.zeros((self.num_rescuers, 2))
 
-        self.victim_pos = self.np_random.uniform(-0.8, 0.8, (self.num_victims, 2))
+        self.victim_pos = np.random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
 
-        self.tree_pos = self.np_random.uniform(-0.8, 0.8, (self.num_trees, 2))
+        self.tree_pos = np.random.uniform(-0.8, 0.8, (self.num_trees, 2))
 
         # Safe zones: randomized or at fixed corners
         if self.randomize_safe_zones:
             # Randomize positions within the world bounds
-            self.safezone_pos = self.np_random.uniform(
-                -0.95, 0.95, (self.num_safe_zones, 2)
-            )
+            self.safezone_pos = np.random.uniform(-0.95, 0.95, (self.num_safe_zones, 2))
 
             # Shuffle types to randomize which zone accepts which victim type
             # Keep types as 0,1,2,3 but in random order
             self.safe_zone_types = list(range(self.num_safe_zones))
-            self.np_random.shuffle(self.safe_zone_types)
+            np.random.shuffle(self.safe_zone_types)
         else:
             # Fixed positions at corners (default behavior)
             self.safezone_pos = np.array(
@@ -483,8 +476,8 @@ class SearchAndRescueEnv(ParallelEnv):
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
             else:
-                # Simple Brownian motion (using seeded RNG)
-                noise = self.np_random.randn(2) * 0.0075
+                # Simple Brownian motion (using global np.random)
+                noise = np.random.randn(2) * 0.0075
                 self.victim_vel[v_i] = self.victim_vel[v_i] * 0.8 + noise
 
             self.victim_pos[v_i] += self.victim_vel[v_i]
