@@ -3,6 +3,8 @@ Utilities for ensuring reproducible experiments with deterministic random number
 """
 
 import random
+import warnings
+
 import numpy as np
 import torch
 import os
@@ -38,6 +40,12 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
         torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
 
     if deterministic:
+        # show warning
+        warnings.warn(
+            "PyTorch deterministic mode is enabled. This may impact performance. "
+            "Some operations may be slower or not have deterministic implementations and may raise errors."
+        )
+
         # Enable deterministic algorithms in PyTorch
         # This ensures that CUDA operations are deterministic
         torch.use_deterministic_algorithms(True)
