@@ -1,3 +1,19 @@
+"""
+Evaluation pipeline for trained multi-agent policies.
+
+This module provides functionality to evaluate trained policies on the
+Search and Rescue environment. It supports:
+
+- Automatic model discovery (finds latest checkpoint)
+- Environment configuration loading from checkpoints
+- Episode-by-episode evaluation with rendering
+- Metric logging to TensorBoard
+- Summary statistics computation
+
+The evaluation runs episodes with the trained policy and logs performance
+metrics including rewards, episode lengths, and per-step rewards.
+"""
+
 from time import sleep
 
 from src.sar_env import make_env
@@ -11,8 +27,30 @@ from torchrl.envs.utils import step_mdp
 
 def find_latest_model(save_folder: str, env_name: str) -> str:
     """
-    Finds the latest .pt file in the save_folder based on modification time.
-    Searches recursively in dated subdirectories (e.g., save_folder/20251220-000020/*.pt)
+    Find the latest model checkpoint file in the save folder.
+
+    This function searches for .pt checkpoint files in the save_folder directory,
+    including recursive search in timestamped subdirectories. It returns the
+    file with the most recent modification time.
+
+    Args:
+        save_folder: Base directory to search for checkpoint files.
+        env_name: Environment name (currently unused, kept for API compatibility).
+
+    Returns:
+        Path to the latest checkpoint file (absolute or relative path).
+
+    Raises:
+        FileNotFoundError: If no .pt files are found in save_folder or its
+            subdirectories.
+
+    Search Strategy:
+        1. First searches recursively in subdirectories (e.g., save_folder/20251220-000020/*.pt)
+        2. Falls back to flat search in save_folder if no files found
+        3. Sorts by modification time and returns the newest file
+
+    Note:
+        The function prints the detected model path for user confirmation.
     """
     # First try recursive search in dated subdirectories
     search_pattern = os.path.join(save_folder, "**", "*.pt")
@@ -41,6 +79,80 @@ def evaluate(
     enable_logging: bool = True,
     **env_kwargs,
 ):
+    """
+    Evaluate a trained policy on the Search and Rescue environment.
+
+    This function loads a trained policy checkpoint and evaluates it by running
+    multiple episodes. It supports automatic model discovery (if model_path is None)
+    and loads environment configuration from the checkpoint to ensure consistency.
+
+    Evaluation Process:
+        1. Resolve model path (auto-detect latest if not provided)
+        2. Load checkpoint and extract environment configuration
+        3. Create environment with saved configuration
+        4. Load policy network weights
+        5. Run num_games episodes with rendering (if enabled)
+        6. Log metrics and compute summary statistics
+
+    Args:
+        model_path: Path to the checkpoint file (.pt). If None, automatically
+            searches for the latest checkpoint in save_folder.
+        save_folder: Base directory containing checkpoints and logs. Used for
+            model discovery if model_path is None, and for creating evaluation logs.
+        num_games: Number of episodes to run for evaluation.
+        enable_logging: Whether to enable TensorBoard logging for evaluation
+            metrics. If False, uses NoOpLogger.
+        **env_kwargs: Environment configuration arguments. These are used if
+            the checkpoint doesn't contain env_config. If env_config exists
+            in the checkpoint, these are overridden (except render_mode which
+            is always taken from env_kwargs). Common arguments:
+            - num_rescuers: Number of rescuer agents
+            - num_victims: Number of victim entities
+            - num_trees: Number of obstacle trees
+            - num_safe_zones: Number of safe zones
+            - max_cycles: Maximum steps per episode
+            - vision_radius: Vision/observation radius
+            - render_mode: Rendering mode ("human" for visualization, None for headless)
+            - continuous_actions: Whether to use continuous actions
+
+    Evaluation Metrics:
+        The function logs the following metrics to TensorBoard:
+        - eval/episode_{i}: Per-step reward for episode i
+        - eval/episode_reward: Total reward for each episode
+        - eval/episode_steps: Number of steps for each episode
+        - eval/mean_reward_per_step: Average reward per step for each episode
+        - eval/mean_episode_reward: Mean reward across all episodes
+        - eval/mean_episode_steps: Mean episode length across all episodes
+        - eval/total_episodes: Total number of episodes evaluated
+
+    Checkpoint Format:
+        The function supports multiple checkpoint formats:
+        1. Full checkpoint dict with "policy_state_dict" key (preferred)
+        2. Checkpoint dict with "actor" key (legacy format)
+        3. Raw state dict (fallback)
+
+    Note:
+        - The policy is set to evaluation mode (no gradient computation)
+        - Rendering introduces a 0.1s delay per step for visualization
+        - Environment configuration from checkpoint takes precedence over
+          env_kwargs (except render_mode)
+        - The function automatically handles different TensorDict structures
+          returned by different TorchRL wrapper versions
+
+    Example:
+        >>> evaluate(
+        ...     model_path="checkpoints/model.pt",
+        ...     num_games=10,
+        ...     render_mode="human",
+        ...     enable_logging=True
+        ... )
+
+        >>> evaluate(
+        ...     save_folder="logs/",
+        ...     num_games=5,
+        ...     render_mode=None
+        ... )  # Auto-detects latest model
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 

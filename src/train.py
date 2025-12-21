@@ -1,3 +1,22 @@
+"""
+Training pipeline for multi-agent reinforcement learning.
+
+This module implements the training loop for the Search and Rescue environment
+using Multi-Agent Proximal Policy Optimization (MAPPO). The training process
+includes:
+
+- Environment interaction via SyncDataCollector
+- Experience collection and storage in replay buffer
+- PPO updates with clipped objective, value loss, and entropy bonus
+- GAE (Generalized Advantage Estimation) for advantage computation
+- TensorBoard logging for monitoring training progress
+
+The training follows the standard PPO algorithm with multi-agent extensions:
+- Decentralized policy (each agent uses local observations)
+- Centralized value function (critic sees all observations)
+- Shared parameters across homogeneous agents
+"""
+
 import time
 
 import torch
@@ -22,8 +41,94 @@ def train(
     save_folder: str = "search_rescue_logs/",
     enable_logging: bool = True,
     **env_kwargs,
-):
+) -> None:
+    """
+    Train a multi-agent policy using MAPPO (Multi-Agent PPO).
 
+    This function implements the complete training pipeline:
+    1. Environment and model initialization
+    2. Data collection using SyncDataCollector
+    3. PPO updates with multiple epochs per batch
+    4. Logging and checkpointing
+
+    Training Algorithm:
+        The training uses Proximal Policy Optimization (PPO) with:
+        - Clipped objective (epsilon=0.2)
+        - Value function loss
+        - Entropy bonus (coefficient=0.1) for exploration
+        - GAE (gamma=0.99, lambda=0.95) for advantage estimation
+        - Gradient clipping (max norm=1.0)
+        - Normalized advantages (excluding time dimension)
+
+    Args:
+        steps: Total number of environment steps (frames) to collect during training.
+        batch_size: Size of minibatches for PPO updates. Note: This is the
+            minibatch size, not the full batch size. The full batch size is
+            frames_per_batch.
+        learning_rate: Learning rate for Adam optimizer.
+        num_epochs: Number of PPO update epochs per collected batch.
+        frames_per_batch: Number of environment steps to collect before each
+            PPO update. This determines the batch size for each update cycle.
+        seed: Random seed for environment initialization and reproducibility.
+        save_folder: Base directory for saving logs, checkpoints, and TensorBoard
+            outputs. A timestamped subdirectory will be created for each run.
+        enable_logging: Whether to enable TensorBoard logging. If False, uses
+            NoOpLogger which discards all log calls.
+        **env_kwargs: Additional keyword arguments passed to make_env().
+            Common arguments include:
+            - num_rescuers: Number of rescuer agents
+            - num_victims: Number of victim entities
+            - num_trees: Number of obstacle trees
+            - num_safe_zones: Number of safe zones (typically 4)
+            - max_cycles: Maximum steps per episode
+            - vision_radius: Vision/observation radius
+            - render_mode: Rendering mode (None for training)
+            - continuous_actions: Whether to use continuous actions
+
+    Training Process:
+        1. Initialize environment, policy, and critic networks
+        2. Create data collector and replay buffer
+        3. For each batch:
+           a. Collect frames_per_batch steps using current policy
+           b. Compute advantages using GAE
+           c. Perform num_epochs PPO updates on the collected batch
+           d. Log metrics (losses, rewards, etc.)
+           e. Update policy weights in collector
+        4. Save final checkpoint with model weights and configuration
+
+    Logged Metrics:
+        - train/loss/objective: PPO clipped objective loss
+        - train/loss/critic: Value function loss
+        - train/loss/entropy: Entropy bonus (encourages exploration)
+        - train/loss/total: Sum of all losses
+        - train/episode_reward: Mean episode reward for completed episodes
+        - train/total_frames: Cumulative number of frames processed
+        - hyperparameters: All training hyperparameters
+
+    Saved Checkpoint:
+        The final checkpoint includes:
+        - policy_state_dict: Trained policy network weights
+        - critic_state_dict: Trained value network weights
+        - optimizer_state_dict: Optimizer state (for resuming training)
+        - total_frames: Total frames collected
+        - iteration: Number of update iterations
+        - env_config: Environment configuration used for training
+
+    Note:
+        The function automatically detects and uses GPU if available.
+        Training can be interrupted with Ctrl+C, but the final checkpoint
+        will only be saved if training completes normally.
+
+    Example:
+        >>> train(
+        ...     steps=100000,
+        ...     frames_per_batch=2048,
+        ...     num_epochs=10,
+        ...     num_rescuers=4,
+        ...     num_victims=8,
+        ...     enable_logging=True
+        ... )
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 

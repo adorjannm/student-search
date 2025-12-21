@@ -1,3 +1,21 @@
+"""
+Search and Rescue Multi-Agent Environment.
+
+This module implements a multi-agent reinforcement learning environment for
+search and rescue operations. Rescuers (adversarial agents) must guide victims
+to their designated safe zones while navigating around obstacles (trees).
+
+The environment features:
+- Multi-agent coordination: Multiple rescuers work together to rescue victims
+- Victim commitment system: Victims commit to rescuers when approached
+- Vision and occlusion: Limited vision radius with tree occlusion
+- Type-based clustering: Victims must be taken to matching safe zone types
+- Physics simulation: Velocity-based movement with collision handling
+
+The environment follows the PettingZoo ParallelEnv API and is compatible with
+TorchRL for training multi-agent reinforcement learning policies.
+"""
+
 from typing import Optional, Union
 
 import numpy as np
@@ -10,6 +28,96 @@ from torchrl.envs import PettingZooWrapper, TransformedEnv, RewardSum
 
 
 class SearchAndRescueEnv(ParallelEnv):
+    """
+    Multi-agent Search and Rescue environment.
+
+    This environment simulates a search-and-rescue operation where rescuers
+    (adversarial agents) must guide victims to designated safe zones. The
+    environment includes obstacles (trees) that block vision and movement,
+    and implements a commitment system where victims follow rescuers when
+    approached.
+
+    Environment Dynamics:
+        - Rescuers move using continuous acceleration actions
+        - Victims commit to rescuers when within follow_radius
+        - Victims are saved when they reach their matching safe zone
+        - Trees block vision and cause collisions
+        - Safe zones are located at the four corners of the map
+
+    Observation Space:
+        For each rescuer agent, the observation includes:
+        - Self velocity (2D)
+        - Self position (2D)
+        - Agent ID one-hot encoding (num_rescuers)
+        - Safe zone relative positions and types (num_safe_zones * 3)
+        - Tree relative positions (num_trees * 2, masked if not visible)
+        - Victim relative positions and types (num_victims * 3, masked if not visible)
+
+    Action Space:
+        Continuous 2D acceleration vector in range [-1, 1] for each rescuer.
+
+    Reward Structure:
+        - +100.0: Successfully rescuing a victim (to assigned rescuer)
+        - +10.0: Assisting in a rescue (to nearby rescuers)
+        - +1.0 / (distance_to_zone + eps): Escorting victim toward safe zone
+        - +0.1 * delta_distance: Distance shaping (getting closer to victims)
+        - -1.0: Tree collision
+        - -1.0: Boundary violation
+        - -5.0: Agent-agent collision
+
+    Termination Conditions:
+        - All victims are saved (success)
+        - Maximum number of steps reached (truncation)
+
+    Attributes:
+        num_rescuers: Number of rescuer agents in the environment
+        num_victims: Number of victim entities to rescue
+        num_trees: Number of obstacle trees in the environment
+        num_safe_zones: Number of safe zones (always 4, at corners)
+        max_steps: Maximum number of steps per episode
+        is_continuous: Whether actions are continuous (always True)
+        world_size: Size of the world (2.0, corresponding to [-1, 1] range)
+        vision_radius: Maximum distance for vision and observation
+        rescue_radius: Distance threshold for rescuing victims
+        agent_size: Radius of agent entities
+        tree_radius: Radius of tree obstacles
+        safe_zone_radius: Radius of safe zones
+        follow_radius: Distance threshold for victim commitment
+        agents: List of active agent names
+        possible_agents: List of all possible agent names
+        victim_names: List of victim entity names
+        victim_types: List of victim type indices (0-3, cyclically assigned)
+        safe_zone_types: List of safe zone type indices (0-3, one per corner)
+        type_colors: Mapping from type index to RGB color tuple
+        action_spaces: Dictionary mapping agent names to action spaces
+        observation_spaces: Dictionary mapping agent names to observation spaces
+        rescuer_pos: Array of rescuer positions [num_rescuers, 2]
+        rescuer_vel: Array of rescuer velocities [num_rescuers, 2]
+        victim_pos: Array of victim positions [num_victims, 2]
+        victim_vel: Array of victim velocities [num_victims, 2]
+        victim_saved: Boolean array indicating which victims are saved
+        victim_assignments: Array mapping victims to assigned rescuer indices (-1 if none)
+        tree_pos: Array of tree positions [num_trees, 2]
+        safezone_pos: Array of safe zone positions [4, 2] (corners)
+        prev_agent_victim_dists: Previous distances for reward shaping
+        steps: Current step count in the episode
+        screen: Pygame screen surface for rendering (None if not rendering)
+        clock: Pygame clock for frame rate control (None if not rendering)
+        font: Pygame font for rendering text labels (None if not rendering)
+
+    Examples:
+        Basic usage:
+            >>> env = SearchAndRescueEnv(num_rescuers=2, num_victims=4)
+            >>> obs, info = env.reset()
+            >>> actions = {agent: env.action_space(agent).sample() for agent in env.agents}
+            >>> obs, rewards, dones, truncs, infos = env.step(actions)
+
+        With rendering:
+            >>> env = SearchAndRescueEnv(render_mode="human")
+            >>> obs, info = env.reset()
+            >>> env.render()  # Display the environment
+    """
+
     metadata = {"render_modes": ["human", "rgb_array"], "name": "search_rescue_v2"}
 
     def __init__(
@@ -24,6 +132,35 @@ class SearchAndRescueEnv(ParallelEnv):
         seed: Optional[int] = None,
         render_mode: Optional[str] = None,
     ):
+        """
+        Initialize the Search and Rescue environment.
+
+        Args:
+            num_rescuers: Number of rescuer agents. Must be >= 1.
+            num_victims: Number of victim entities to rescue. Must be >= 1.
+            num_trees: Number of obstacle trees. Must be >= 0.
+            num_safe_zones: Number of safe zones. Should be 4 (corners), but
+                can be configured. Each safe zone has a unique type (0-3).
+            max_cycles: Maximum number of steps per episode before truncation.
+            continuous_actions: Whether to use continuous actions (currently
+                always True internally, this parameter is for API compatibility).
+            vision_radius: Maximum distance at which agents can observe entities.
+                Entities beyond this radius or occluded by trees are masked.
+            seed: Random seed for environment initialization. If None, uses
+                system random seed.
+            render_mode: Rendering mode. Options:
+                - None: No rendering
+                - "human": Render to a window using pygame
+                - "rgb_array": Return RGB array (not implemented)
+
+        Note:
+            Victim types are assigned cyclically (victim i gets type i % 4).
+            Safe zones are always positioned at the four corners:
+            - Type 0: Top-left (-0.9, 0.9)
+            - Type 1: Top-right (0.9, 0.9)
+            - Type 2: Bottom-left (-0.9, -0.9)
+            - Type 3: Bottom-right (0.9, -0.9)
+        """
         self.num_rescuers = num_rescuers
         self.num_victims = num_victims
         self.num_trees = num_trees
@@ -89,7 +226,32 @@ class SearchAndRescueEnv(ParallelEnv):
         self.screen = None
         self.clock = None
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(
+        self, seed: Optional[int] = None, options: Optional[dict] = None
+    ) -> tuple[dict, dict]:
+        """
+        Reset the environment to an initial state.
+
+        This method initializes all entities (rescuers, victims, trees, safe zones)
+        to random positions within the world bounds. All velocities are set to zero,
+        and victim states are reset (not saved, no assignments).
+
+        Args:
+            seed: Random seed for reproducible initialization. If provided,
+                sets numpy random seed. If None, uses current random state.
+            options: Optional dictionary of reset options (currently unused).
+
+        Returns:
+            A tuple containing:
+            - observations: Dictionary mapping agent names to observation arrays.
+                Each observation is a numpy array of shape (obs_dim,).
+            - infos: Dictionary mapping agent names to info dictionaries.
+                Currently empty for all agents.
+
+        Note:
+            The agents list is reset to include all possible agents. This is
+            required by the PettingZoo API to handle agent removal on termination.
+        """
         self.steps = 0
         if seed is not None:
             np.random.seed(seed)
@@ -122,21 +284,31 @@ class SearchAndRescueEnv(ParallelEnv):
 
     def _is_visible(
         self, observer_pos, target_pos, target_radius, exclude_tree_idx=None
-    ):
-        """Checks whether a target is within vision range and not occluded by trees.
-        Args:
-            observer_pos: Position of the observer.
-            target_pos: Position of the target to check visibility of.
-            target_radius: Radius of the target. Currently unused, kept for API compatibility
-                and potential future use in more detailed visibility calculations.
-            exclude_tree_idx: Optional tree index to exclude from the occlusion check
-                (e.g., when checking if a tree itself is visible). Occlusion is currently
-                determined using the environment's ``tree_radius`` for all trees.
+    ) -> bool:
         """
-        # If vision radius is zero, nothing is visible
-        if self.vision_radius == 0.0:
-            return False
+        Check if a target is visible from an observer position.
 
+        A target is visible if:
+        1. It is within the vision_radius distance
+        2. The line of sight is not blocked by any tree
+
+        Visibility is determined by checking if the line segment from observer
+        to target intersects any tree circle. This uses geometric intersection
+        calculations.
+
+        Args:
+            observer_pos: 2D position of the observer (rescuer agent).
+            target_pos: 2D position of the target entity (victim or tree).
+            target_radius: Radius of the target entity (for collision detection).
+
+        Returns:
+            True if the target is visible (within range and not occluded),
+            False otherwise.
+
+        Note:
+            If the target position exactly matches a tree position, it is
+            considered visible (to handle edge cases where a tree is the target).
+        """
         dist = np.linalg.norm(target_pos - observer_pos)
         if dist > self.vision_radius:
             return False
@@ -180,7 +352,39 @@ class SearchAndRescueEnv(ParallelEnv):
                     return False  # Blocked
         return True
 
-    def _get_obs(self):
+    def _get_obs(self) -> dict:
+        """
+        Compute observations for all active agents.
+
+        Observations are computed relative to each agent's position and include:
+        - Self state (velocity, position)
+        - Agent ID (one-hot encoding for symmetry breaking)
+        - Safe zones (global knowledge, always visible)
+        - Trees (masked if not visible or occluded)
+        - Victims (masked if not visible, occluded, or already saved)
+
+        Masking is done by setting relative positions to [0.0, 0.0] and
+        type to -1.0 for victims (indicating not visible).
+
+        Returns:
+            Dictionary mapping agent names to observation arrays.
+            Each observation is a numpy array of shape (obs_dim,) containing:
+            - [0:2]: Self velocity (vx, vy)
+            - [2:4]: Self position (x, y)
+            - [4:4+num_rescuers]: Agent ID one-hot encoding
+            - [4+num_rescuers:4+num_rescuers+num_safe_zones*3]: Safe zones
+                (relative_x, relative_y, type) for each safe zone
+            - [safe_zones_end:safe_zones_end+num_trees*2]: Trees
+                (relative_x, relative_y) for each tree (masked if not visible)
+            - [trees_end:trees_end+num_victims*3]: Victims
+                (relative_x, relative_y, type) for each victim
+                (masked as [0, 0, -1] if not visible or saved)
+
+        Note:
+            Other rescuers are intentionally excluded from observations to
+            focus learning on the rescue task rather than agent coordination
+            through explicit observation.
+        """
         observations = {}
         for i, agent in enumerate(self.agents):
             # If agent was removed (e.g. done), skip
@@ -235,7 +439,43 @@ class SearchAndRescueEnv(ParallelEnv):
             observations[agent] = np.array(obs_vec, dtype=np.float32)
         return observations
 
-    def step(self, actions):
+    def step(self, actions: dict) -> tuple[dict, dict, dict, dict, dict]:
+        """
+        Execute one environment step.
+
+        This method processes actions for all agents, updates physics (movement,
+        collisions), handles victim dynamics (commitment and following), computes
+        rewards, and checks termination conditions.
+
+        Step Process:
+        1. Apply rescuer actions (acceleration updates)
+        2. Handle wall collisions (reflection with damping)
+        3. Handle tree collisions (reflection with damping, penalty)
+        4. Handle agent-agent collisions (soft repulsion)
+        5. Update victim dynamics (commitment logic, following behavior)
+        6. Compute rewards (rescues, distance shaping, penalties)
+        7. Check termination conditions
+
+        Args:
+            actions: Dictionary mapping agent names to action arrays.
+                Each action is a 2D numpy array representing acceleration
+                in range [-1, 1] for (x, y) directions.
+
+        Returns:
+            A tuple containing:
+            - observations: Dictionary mapping agent names to observation arrays.
+            - rewards: Dictionary mapping agent names to reward values (float).
+            - terminations: Dictionary mapping agent names to termination flags (bool).
+                True if all victims are saved (success).
+            - truncations: Dictionary mapping agent names to truncation flags (bool).
+                True if max_steps reached.
+            - infos: Dictionary mapping agent names to info dictionaries.
+                Currently empty for all agents.
+
+        Note:
+            On termination or truncation, the agents list is emptied to comply
+            with PettingZoo API requirements. This prevents further steps.
+        """
         rewards = {a: 0.0 for a in self.agents}
         terminations = {a: False for a in self.agents}
         truncations = {a: False for a in self.agents}
@@ -391,7 +631,30 @@ class SearchAndRescueEnv(ParallelEnv):
 
         return self._get_obs(), rewards, terminations, truncations, infos
 
-    def render(self):
+    def render(self) -> Optional[np.ndarray]:
+        """
+        Render the environment state.
+
+        This method renders the current state of the environment using pygame.
+        It displays:
+        - Safe zones (colored rectangles at corners)
+        - Trees (gray circles)
+        - Victims (colored circles matching their type)
+        - Rescuers (white circles with outlines)
+        - Vision circles (white outlines around rescuers)
+
+        The rendering uses a 600x600 pixel window with coordinate transformation
+        from world coordinates [-1, 1] to screen coordinates [0, 600].
+
+        Returns:
+            None if render_mode is "human" or None.
+            RGB array if render_mode is "rgb_array" (not currently implemented).
+
+        Note:
+            Pygame is initialized on first render call. The screen and clock
+            are stored as instance variables for subsequent render calls.
+            Rendering runs at approximately 30 FPS.
+        """
         if self.render_mode is None:
             return
 
@@ -471,12 +734,28 @@ class SearchAndRescueEnv(ParallelEnv):
         pygame.display.flip()
         self.clock.tick(30)
 
-    def close(self):
+    def close(self) -> None:
+        """
+        Clean up rendering resources.
+
+        Closes the pygame display if it was initialized. This should be called
+        when the environment is no longer needed to free system resources.
+        """
         if self.screen:
             pygame.quit()
 
     def _compute_agent_victim_dists(self) -> list[float]:
-        """Compute min distance from each agent to nearest unsaved victim."""
+        """
+        Compute minimum distance from each agent to the nearest unsaved victim.
+
+        This is used for reward shaping to encourage agents to approach victims.
+        Only unsaved victims are considered in the distance calculation.
+
+        Returns:
+            List of minimum distances, one per rescuer agent. Each value is
+            the Euclidean distance to the closest unsaved victim. If no unsaved
+            victims exist, returns 0.0 for all agents.
+        """
         dists = []
         unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
         for i in range(self.num_rescuers):
@@ -490,7 +769,35 @@ class SearchAndRescueEnv(ParallelEnv):
             dists.append(min_dist)
         return dists
 
-    def _compute_rewards(self, rewards) -> int:
+    def _compute_rewards(self, rewards: dict) -> int:
+        """
+        Compute and assign rewards for all agents.
+
+        This method implements the complete reward structure:
+        - Distance shaping: Reward for getting closer to victims
+        - Rescue rewards: Large reward (+100) for successfully rescuing victims
+        - Assistance rewards: Small reward (+10) for nearby rescuers during rescue
+        - Escort rewards: Continuous reward for escorting victims toward safe zones
+        - Penalties: Tree collisions, boundary violations, agent collisions
+
+        The method also updates victim saved states and tracks assignments.
+
+        Args:
+            rewards: Dictionary mapping agent names to reward values.
+                This dictionary is modified in-place to add computed rewards.
+
+        Returns:
+            Number of saved victims after this step.
+
+        Reward Details:
+            - Distance shaping: +0.1 * (prev_distance - current_distance)
+            - Successful rescue: +100.0 to assigned rescuer
+            - Assistance: +10.0 to rescuers within follow_radius during rescue
+            - Escort: +1.0 / (distance_to_zone + eps) to assigned rescuer
+            - Tree collision: -1.0 (applied during step physics)
+            - Boundary violation: -1.0
+            - Agent collision: -5.0 per agent involved
+        """
         # Delta-based distance shaping (reward for getting closer, penalty for moving away)
         current_dists = self._compute_agent_victim_dists()
         for i, agent in enumerate(self.agents):
@@ -584,6 +891,46 @@ class SearchAndRescueEnv(ParallelEnv):
 
 
 def make_env(device: Union[torch.device, str] = "cpu", **kwargs) -> TransformedEnv:
+    """
+    Create a wrapped Search and Rescue environment for TorchRL.
+
+    This factory function creates a SearchAndRescueEnv instance and wraps it
+    with the necessary TorchRL transformations:
+    1. PettingZooWrapper: Converts PettingZoo ParallelEnv to TorchRL format
+    2. TransformedEnv with RewardSum: Adds episode reward tracking
+
+    The wrapped environment is moved to the specified device (CPU or GPU)
+    and is ready for use with TorchRL collectors and training pipelines.
+
+    Args:
+        device: Device to run the environment on. Can be "cpu", "cuda",
+            or a torch.device object.
+        **kwargs: Additional keyword arguments passed to SearchAndRescueEnv
+            constructor. Common arguments include:
+            - num_rescuers: Number of rescuer agents
+            - num_victims: Number of victim entities
+            - num_trees: Number of obstacle trees
+            - num_safe_zones: Number of safe zones (typically 4)
+            - max_cycles: Maximum steps per episode
+            - vision_radius: Vision/observation radius
+            - render_mode: Rendering mode ("human", None, etc.)
+            - seed: Random seed
+
+    Returns:
+        TransformedEnv instance ready for TorchRL training/evaluation.
+        The environment includes:
+        - Observation key: ("agents", "observation")
+        - Action key: ("agents", "action")
+        - Reward key: ("agents", "reward")
+        - Episode reward key: ("agents", "episode_reward")
+        - Done key: ("agents", "done")
+        - Terminated key: ("agents", "terminated")
+
+    Example:
+        >>> env = make_env(device="cuda", num_rescuers=4, num_victims=8)
+        >>> td = env.reset()
+        >>> print(td.keys())  # Shows available keys
+    """
     env = SearchAndRescueEnv(**kwargs)
     group_map = {"agents": env.possible_agents}
     env = PettingZooWrapper(env, group_map=group_map, use_mask=True)
