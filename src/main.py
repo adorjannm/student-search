@@ -73,7 +73,7 @@ def main(cfg: DictConfig):
         train(
             steps=cfg.train.total_timesteps,
             batch_size=cfg.train.batch_size,
-            seed=cfg.train.seed,
+            seed=cfg.seed,
             save_folder=cfg.save_folder,
             enable_logging=enable_logging,
             render_mode=cfg.train.render_mode,
@@ -86,6 +86,7 @@ def main(cfg: DictConfig):
             save_folder=cfg.save_folder,
             enable_logging=enable_logging,
             render_mode=cfg.eval.render_mode,
+            seed=cfg.seed,
             **env_kwargs,
         )
 

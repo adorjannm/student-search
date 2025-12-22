@@ -12,6 +12,7 @@ Tests cover:
 import numpy as np
 
 from conftest import noop_action, noop_actions, place_agent, place_victim, place_tree
+from src.seed_utils import set_seed
 
 
 # =============================================================================
@@ -29,7 +30,6 @@ class TestReset:
             num_victims=3,
             num_trees=4,
             num_safe_zones=4,
-            seed=42,
         )
 
         obs, info = env.reset()
@@ -72,11 +72,12 @@ class TestReset:
     def test_seed_reproducibility(self, make_env):
         """Same seed produces identical initial state."""
         seed = 123
+        set_seed(seed)
 
-        env1 = make_env(num_rescuers=2, num_victims=2, num_trees=3, seed=seed)
+        env1 = make_env(num_rescuers=2, num_victims=2, num_trees=3)
         obs1, _ = env1.reset(seed=seed)
 
-        env2 = make_env(num_rescuers=2, num_victims=2, num_trees=3, seed=seed)
+        env2 = make_env(num_rescuers=2, num_victims=2, num_trees=3)
         obs2, _ = env2.reset(seed=seed)
 
         assert np.allclose(env1.rescuer_pos, env2.rescuer_pos)
@@ -88,7 +89,13 @@ class TestReset:
 
     def test_multiple_resets(self, make_env):
         """Reset can be called multiple times correctly."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=1, seed=42)
+        set_seed(42)
+
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=1,
+        )
 
         env.reset(seed=100)
         pos1 = env.rescuer_pos[0].copy()
@@ -109,7 +116,11 @@ class TestReset:
 
     def test_safe_zones_fixed_positions(self, make_env):
         """Safe zones are at fixed corner positions by default."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         expected = np.array([[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]])
@@ -117,7 +128,11 @@ class TestReset:
 
     def test_prev_distances_initialized(self, make_env):
         """Previous distances are initialized after reset."""
-        env = make_env(num_rescuers=2, num_victims=2, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=2,
+            num_trees=0,
+        )
         env.reset()
 
         assert hasattr(env, "prev_agent_victim_dists")
@@ -135,7 +150,11 @@ class TestStepMechanics:
 
     def test_increments_counter(self, make_env):
         """Step increments the step counter."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         assert env.steps == 0
@@ -148,7 +167,11 @@ class TestStepMechanics:
 
     def test_applies_actions(self, make_env):
         """Step correctly applies actions and updates positions."""
-        env = make_env(num_rescuers=1, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         initial_pos = env.rescuer_pos[0].copy()
@@ -168,7 +191,11 @@ class TestStepMechanics:
 
     def test_velocity_clamping(self, make_env):
         """Velocity is clamped to max speed."""
-        env = make_env(num_rescuers=1, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         # Apply very large action
@@ -180,7 +207,11 @@ class TestStepMechanics:
 
     def test_observations_after_step(self, make_env):
         """Observations are returned correctly after step."""
-        env = make_env(num_rescuers=2, num_victims=1, num_trees=1, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=1,
+            num_trees=1,
+        )
         env.reset()
 
         agent_names = env.agents.copy()
@@ -194,7 +225,11 @@ class TestStepMechanics:
 
     def test_rewards_structure(self, make_env):
         """Rewards are returned correctly for all agents."""
-        env = make_env(num_rescuers=2, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         agent_names = env.agents.copy()
@@ -216,7 +251,11 @@ class TestCollisions:
 
     def test_wall_collision(self, make_env):
         """Wall collisions are handled correctly."""
-        env = make_env(num_rescuers=1, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         # Place agent near boundary with velocity toward wall
@@ -232,7 +271,11 @@ class TestCollisions:
 
     def test_tree_collision_penalty(self, make_env):
         """Tree collisions apply penalty and handle physics."""
-        env = make_env(num_rescuers=1, num_victims=0, num_trees=1, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=0,
+            num_trees=1,
+        )
         env.reset()
 
         agent_name = env.agents[0]
@@ -251,7 +294,11 @@ class TestCollisions:
 
     def test_agent_repulsion(self, make_env):
         """Agent-agent repulsion works correctly."""
-        env = make_env(num_rescuers=2, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         place_agent(env, 0, (0.0, 0.0))
@@ -266,7 +313,11 @@ class TestCollisions:
 
     def test_agent_collision_penalty(self, make_env):
         """Agent collisions apply penalty."""
-        env = make_env(num_rescuers=2, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         agent_names = env.agents.copy()
@@ -281,7 +332,11 @@ class TestCollisions:
 
     def test_boundary_penalty(self, make_env):
         """Agents near boundaries receive penalty."""
-        env = make_env(num_rescuers=1, num_victims=0, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=0,
+            num_trees=0,
+        )
         env.reset()
 
         agent_name = env.agents[0]
@@ -302,7 +357,11 @@ class TestVictimDynamics:
 
     def test_victim_assignment(self, make_env):
         """Victims assign to nearby agents."""
-        env = make_env(num_rescuers=2, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=2,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         place_agent(env, 0, (0.0, 0.0))
@@ -315,7 +374,11 @@ class TestVictimDynamics:
 
     def test_victim_follows_assigned_agent(self, make_env):
         """Assigned victims follow their assigned agent."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         place_agent(env, 0, (0.0, 0.0))
@@ -332,7 +395,11 @@ class TestVictimDynamics:
 
     def test_victim_brownian_motion(self, make_env):
         """Unassigned victims move with Brownian motion."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         # Place victim far from agent (not assigned)
@@ -347,7 +414,11 @@ class TestVictimDynamics:
 
     def test_saved_victim_stationary(self, make_env):
         """Saved victims don't move."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         env.victim_saved[0] = True
@@ -370,7 +441,11 @@ class TestSavingAndTermination:
 
     def test_victim_saved_at_safe_zone(self, make_env):
         """Victims are saved when reaching correct safe zone."""
-        env = make_env(num_rescuers=1, num_victims=1, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+        )
         env.reset()
 
         agent_name = env.agents[0]
@@ -393,7 +468,11 @@ class TestSavingAndTermination:
 
     def test_termination_all_victims_saved(self, make_env):
         """Episode terminates when all victims are saved."""
-        env = make_env(num_rescuers=1, num_victims=2, num_trees=0, seed=42)
+        env = make_env(
+            num_rescuers=1,
+            num_victims=2,
+            num_trees=0,
+        )
         env.reset()
 
         # Save first victim manually
@@ -411,7 +490,10 @@ class TestSavingAndTermination:
     def test_truncation_max_steps(self, make_env):
         """Episode truncates after max_steps."""
         env = make_env(
-            num_rescuers=1, num_victims=1, num_trees=0, max_cycles=5, seed=42
+            num_rescuers=1,
+            num_victims=1,
+            num_trees=0,
+            max_cycles=5,
         )
         env.reset()
 

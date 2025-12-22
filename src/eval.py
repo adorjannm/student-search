@@ -21,6 +21,7 @@ import numpy as np
 from src.sar_env import make_env
 from src.models import make_policy
 from src.logger import RunContext, TensorboardLogger
+from src.seed_utils import set_seed
 import glob
 import os
 import torch
@@ -87,6 +88,7 @@ def evaluate(
     save_folder: str = "search_rescue_logs",
     num_games: int = 3,
     enable_logging: bool = True,
+    seed: int = 0,
     **env_kwargs,
 ):
     """
@@ -165,6 +167,10 @@ def evaluate(
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+
+    # Set random seeds for reproducibility
+    set_seed(seed, deterministic=True)
+    print(f"Random seed set to: {seed}")
 
     # Setup logging
     run_ctx = RunContext(base_dir=save_folder, run_name="eval", create_subdirs=True)
