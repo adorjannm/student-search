@@ -57,6 +57,7 @@ def main(cfg: DictConfig):
         "continuous_actions": cfg.env.continuous_actions,
         "vision_radius": cfg.env.vision_radius,
         "randomize_safe_zones": cfg.env.get("randomize_safe_zones", False),
+        "n_closest_landmarks": cfg.env.get("n_closest_landmarks", 3),
     }
 
     if cfg.train.active:

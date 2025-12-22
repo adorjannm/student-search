@@ -294,6 +294,7 @@ def train(
         "continuous_actions": env.base_env.is_continuous,
         "vision_radius": env.base_env.vision_radius,
         "randomize_safe_zones": env.base_env.randomize_safe_zones,
+        "n_closest_landmarks": getattr(env.base_env, "n_closest_landmarks", 3),
     }
 
     torch.save(

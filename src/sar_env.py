@@ -28,6 +28,7 @@ class SearchAndRescueEnv(ParallelEnv):
         max_trees: Optional[
             int
         ] = None,  # For curriculum learning - fixes obs space size
+        n_closest_landmarks: int = 3,
     ):
         self.num_rescuers = num_rescuers
         self.num_victims = num_victims
@@ -37,6 +38,7 @@ class SearchAndRescueEnv(ParallelEnv):
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
         self.randomize_safe_zones = randomize_safe_zones
+        self.n_closest_landmarks = n_closest_landmarks
 
         # For curriculum learning: use max_trees for obs space size, pad observations
         self.max_trees = max_trees if max_trees is not None else num_trees
@@ -76,18 +78,14 @@ class SearchAndRescueEnv(ParallelEnv):
         # Observation Space Calculation (Partial Observability with Vision Masking)
         # Layout per agent:
         # [self_vel(2), self_pos(2), agent_id(num_rescuers),
-        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx),
-        #  trees(max_trees * 3: rel_x, rel_y, visible_bit),
+        #  landmarks(N * 2: rel_x, rel_y),
         #  victims(num_victims * 4: rel_x, rel_y, type_idx, visible_bit),
         #  other_rescuers((num_rescuers - 1) * 3: rel_x, rel_y, visible_bit)]
-        self.max_safe_zones = self.num_safe_zones  # kept for clarity
-
         self.obs_dim = (
             2  # self_vel
             + 2  # self_pos
             + self.num_rescuers  # agent_id one-hot
-            + (self.max_safe_zones * 3)
-            + (self.max_trees * 3)
+            + (self.n_closest_landmarks * 2)  # N closest landmarks (rel_x, rel_y)
             + (self.num_victims * 4)
             + ((self.num_rescuers - 1) * 3)
         )
@@ -109,15 +107,10 @@ class SearchAndRescueEnv(ParallelEnv):
         obs_low.extend([0.0] * self.num_rescuers)
         obs_high.extend([1.0] * self.num_rescuers)
 
-        # Safe zones: rel_x, rel_y (normalized), type
-        for _ in range(self.max_safe_zones):
-            obs_low.extend([rel_low, rel_low, 0.0])
-            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
-
-        # Trees: rel_x, rel_y (normalized), visible bit
-        for _ in range(self.max_trees):
-            obs_low.extend([rel_low, rel_low, 0.0])
-            obs_high.extend([rel_high, rel_high, 1.0])
+        # Landmarks: N closest (rel_x, rel_y)
+        for _ in range(self.n_closest_landmarks):
+            obs_low.extend([rel_low, rel_low])
+            obs_high.extend([rel_high, rel_high])
 
         # Victims: rel_x, rel_y (normalized), type, visible bit
         for _ in range(self.num_victims):
@@ -319,22 +312,36 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (always visible landmarks)
-            for sz_i in range(self.num_safe_zones):
-                rel_pos = (self.safezone_pos[sz_i] - my_pos) / self.world_size
-                obs_vec.extend(
-                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
-                )
+            # 3. N closest landmarks (safe_zones + visible trees): rel_x, rel_y
+            landmark_candidates: list[tuple[float, float, float]] = (
+                []
+            )  # (dist, rel_x, rel_y)
 
-            # 4. Trees (partial observability): mask rel_pos when not visible
-            for t_i in range(self.max_trees):
-                if t_i < self.num_trees and self._is_visible(
+            # Safe zones are always known landmarks
+            for sz_i in range(self.num_safe_zones):
+                rel = (self.safezone_pos[sz_i] - my_pos) / self.world_size
+                dist = float(np.linalg.norm(self.safezone_pos[sz_i] - my_pos))
+                landmark_candidates.append((dist, float(rel[0]), float(rel[1])))
+
+            # Trees are landmarks too, but only if visible (matches your partial observability design)
+            for t_i in range(self.num_trees):
+                if self._is_visible(
                     my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
-                    rel_pos = (self.tree_pos[t_i] - my_pos) / self.world_size
-                    obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
-                else:
-                    obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
+                    rel = (self.tree_pos[t_i] - my_pos) / self.world_size
+                    dist = float(np.linalg.norm(self.tree_pos[t_i] - my_pos))
+                    landmark_candidates.append((dist, float(rel[0]), float(rel[1])))
+
+            # Sort by distance and take N
+            landmark_candidates.sort(key=lambda x: x[0])
+            top = landmark_candidates[: self.n_closest_landmarks]
+
+            # Pad if fewer than N
+            while len(top) < self.n_closest_landmarks:
+                top.append((0.0, 0.0, 0.0))
+
+            for _, rx, ry in top:
+                obs_vec.extend([rx, ry])
 
             # 5. Victims (bounded, no sentinel; include visible bit)
             for v_i in range(self.num_victims):
