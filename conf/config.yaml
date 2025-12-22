@@ -26,6 +26,7 @@ eval:
   active: false
   games: 10
   render_mode: "human"
+  model_path: null # full path to model checkpoint (pt file) or relative path from run context
 save_folder: "search_rescue_logs/"
 seed: 0
 tensorboard:
