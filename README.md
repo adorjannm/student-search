@@ -3,28 +3,25 @@
 [![CI](https://github.com/elte-collective-intelligence/student-search/actions/workflows/ci.yml/badge.svg)](https://github.com/elte-collective-intelligence/student-search/actions/workflows/ci.yml)
 [![Docker](https://github.com/elte-collective-intelligence/student-search/actions/workflows/docker.yml/badge.svg)](https://github.com/elte-collective-intelligence/student-search/actions/workflows/docker.yml)
 [![codecov](https://codecov.io/gh/elte-collective-intelligence/student-search/branch/main/graph/badge.svg)](https://codecov.io/gh/elte-collective-intelligence/student-search)
-[![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC--BY--NC--ND%204.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A multi-agent reinforcement learning environment and training framework for search-and-rescue operations. This project simulates a cooperative rescue mission where multiple rescuers (adversarial agents) must guide victims to designated safe zones while navigating around obstacles, using the PettingZoo MPE framework and TorchRL for training.
+A multi-agent reinforcement learning environment and training framework for search-and-rescue operations. This project simulates a cooperative rescue mission where multiple rescuers (cooperative agents) must guide victims to designated safe zones while navigating around obstacles, using the PettingZoo MPE framework and TorchRL for training.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Features](#features)
-- [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
 - [Environment Details](#environment-details)
 - [Training](#training)
 - [Evaluation](#evaluation)
-- [Configuration](#configuration)
 - [Architecture](#architecture)
-- [API Documentation](#api-documentation)
+- [Configuration](#configuration)
+- [Project Structure](#project-structure)
+- [Docker Support](#docker-support)
 - [Development](#development)
 - [Testing](#testing)
-- [Docker Support](#docker-support)
-- [Documentation](#documentation)
+- [API Documentation](#api-documentation)
 - [Team Members](#team-members)
 - [License](#license)
 
@@ -32,7 +29,7 @@ A multi-agent reinforcement learning environment and training framework for sear
 
 This project implements a multi-agent reinforcement learning environment where:
 
-- **Rescuers** (adversarial agents) must locate and guide victims to safe zones
+- **Rescuers** (cooperative agents) must locate and guide victims to safe zones
 - **Victims** are environmental entities that commit to rescuers when approached and follow them
 - **Safe Zones** are located at the four corners of the map, each with a unique type (A, B, C, D)
 - **Trees** act as obstacles that block vision and cause collisions
@@ -40,86 +37,19 @@ This project implements a multi-agent reinforcement learning environment where:
 
 The environment is built using [PettingZoo](https://pettingzoo.farama.org/) and integrates with [TorchRL](https://github.com/pytorch/rl) for training multi-agent policies using MAPPO (Multi-Agent Proximal Policy Optimization).
 
-## Features
+### Why MAPPO?
 
-### Environment Features
+We chose MAPPO (Multi-Agent Proximal Policy Optimization) for this environment because:
 
-1. **Multi-Agent Coordination**
-   - Multiple rescuers work together to rescue victims
-   - Decentralized policy execution (each agent uses local observations)
-   - Centralized value function for better credit assignment
+1. **Decentralized execution with centralized training**: Agents learn with global information but act using only local observations - essential for real-world search-and-rescue scenarios.
+2. **Credit assignment**: The centralized critic helps attribute rewards correctly among cooperating agents.
+3. **Scalability**: MAPPO handles varying numbers of agents without major architectural changes.
+4. **Stability**: PPO's clipping mechanism provides stable training even with the complex multi-agent dynamics.
 
-2. **Victim Commitment System**
-   - Victims commit to rescuers when approached (within `follow_radius`)
-   - Hysteresis prevents rapid switching between rescuers
-   - Victims follow committed rescuers until rescued or rescuer moves away
+### Why PettingZoo + TorchRL?
 
-3. **Vision and Occlusion**
-   - Limited vision radius for realistic observation constraints
-   - Tree obstacles block line-of-sight
-   - Masked observations for non-visible entities
-
-4. **Physics Simulation**
-   - Velocity-based movement with acceleration actions
-   - Collision detection and response (walls, trees, agents)
-   - Soft repulsion between agents to prevent clustering
-
-5. **Reward Structure**
-   - Large reward (+100) for successful rescues
-   - Distance shaping rewards for approaching victims
-   - Escort rewards for guiding victims toward safe zones
-   - Penalties for collisions and boundary violations
-
-6. **Rendering**
-   - Real-time visualization using Pygame
-   - Color-coded victims and safe zones by type
-   - Vision radius visualization
-   - Episode recording support
-
-## Installation
-
-### Prerequisites
-
-- Python 3.13 or higher
-- pip package manager
-- (Optional) CUDA-capable GPU for faster training
-
-### Step-by-Step Installation
-
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://gitlab.inf.elte.hu/student-projects-and-thesis/collective-intelligence/search.git
-   cd search
-   ```
-
-2. **Create a virtual environment (recommended):**
-
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies:**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Dependencies
-
-The project relies on the following key packages:
-
-- **torch** (2.9.1): PyTorch for neural network operations
-- **torchrl** (0.10.1): Reinforcement learning utilities and algorithms
-- **pettingzoo** (1.24.3): Multi-agent environment framework
-- **gymnasium** (1.2.2): RL environment interface
-- **hydra-core** (1.3.2): Configuration management
-- **tensorboard** (2.20.0): Training visualization
-- **pygame** (2.6.1): Environment rendering
-- **numpy** (2.3.5): Numerical computations
-
-See `requirements.txt` for the complete list with versions.
+- **PettingZoo** provides a standardized API for multi-agent environments, making our environment interoperable with various RL frameworks.
+- **TorchRL** offers efficient data collection, replay buffers, and loss modules optimized for PyTorch, enabling fast experimentation.
 
 ## Quick Start
 
@@ -128,7 +58,7 @@ See `requirements.txt` for the complete list with versions.
 Train a multi-agent policy with default configuration:
 
 ```bash
-python main.py train.active=true
+python dfhdfgjfdgdjkghkmain.py train.active=true
 ```
 
 Train with custom parameters:
@@ -161,38 +91,6 @@ python main.py tensorboard.active=true
 
 Then open http://localhost:6006 in your browser.
 
-## Project Structure
-
-```
-.
-├── src/                    # Source code
-│   ├── __init__.py
-│   ├── main.py            # Main entry point (Hydra CLI)
-│   ├── sar_env.py          # SearchAndRescueEnv implementation
-│   ├── agent.py            # Agent entity definitions
-│   ├── victim.py           # Victim entity definitions
-│   ├── landmark.py         # Landmark (tree/safe zone) definitions
-│   ├── models.py           # Neural network model factories
-│   ├── train.py            # Training pipeline
-│   ├── eval.py             # Evaluation pipeline
-│   ├── metrics.py          # Evaluation metrics and tracking
-│   └── logger.py           # TensorBoard logging utilities
-├── tests/                  # Test suite
-│   ├── conftest.py        # Pytest configuration
-│   ├── test_env_smoke.py  # Environment smoke tests
-│   └── test_vision.py     # Vision system tests
-├── conf/                   # Configuration files
-│   └── config.yaml        # Main Hydra configuration
-├── docker/                 # Docker support
-│   └── Dockerfile         # Container definition
-├── images/                 # Documentation images/videos
-├── .github/workflows/      # CI/CD workflows
-├── requirements.txt        # Python dependencies
-├── Makefile               # Build automation
-├── README.md              # This file
-└── Documentation.pdf       # Detailed project documentation
-```
-
 ## Environment Details
 
 ### Observation Space
@@ -200,20 +98,21 @@ Then open http://localhost:6006 in your browser.
 Each rescuer agent receives an observation vector containing:
 
 1. **Self State** (4 values):
+
    - Velocity: `[vx, vy]`
    - Position: `[x, y]`
-
 2. **Agent ID** (`num_rescuers` values):
-   - One-hot encoding for symmetry breaking
 
+   - One-hot encoding for symmetry breaking
 3. **Safe Zones** (`num_safe_zones * 3` values):
+
    - Relative position: `[rel_x, rel_y]`
    - Type index: `[type]` (0-3)
-
 4. **Trees** (`num_trees * 2` values):
-   - Relative position: `[rel_x, rel_y]` (masked as `[0, 0]` if not visible)
 
+   - Relative position: `[rel_x, rel_y]` (masked as `[0, 0]` if not visible)
 5. **Victims** (`num_victims * 3` values):
+
    - Relative position: `[rel_x, rel_y]`
    - Type index: `[type]` (masked as `[0, 0, -1]` if not visible or saved)
 
@@ -224,6 +123,7 @@ Each rescuer agent receives an observation vector containing:
 Continuous 2D acceleration vector: `[ax, ay]` in range `[-1, 1]`
 
 Actions are applied as:
+
 ```python
 velocity = velocity * 0.8 + action * 0.1
 velocity = clip(velocity, max_speed=0.08)
@@ -232,15 +132,15 @@ position = position + velocity
 
 ### Reward Structure
 
-| Event | Reward | Recipient |
-|-------|--------|-----------|
-| Successful rescue | +100.0 | Assigned rescuer |
-| Assistance during rescue | +10.0 | Nearby rescuers (within `follow_radius`) |
-| Escorting victim | +1.0 / (distance + eps) | Assigned rescuer (per step) |
-| Distance shaping | +0.1 * delta_distance | All rescuers (getting closer) |
-| Tree collision | -1.0 | Colliding rescuer |
-| Boundary violation | -1.0 | Violating rescuer |
-| Agent collision | -5.0 | Both colliding rescuers |
+| Event                    | Reward                  | Recipient                                  |
+| ------------------------ | ----------------------- | ------------------------------------------ |
+| Successful rescue        | +100.0                  | Assigned rescuer                           |
+| Assistance during rescue | +10.0                   | Nearby rescuers (within `follow_radius`) |
+| Escorting victim         | +1.0 / (distance + eps) | Assigned rescuer (per step)                |
+| Distance shaping         | +0.1\* delta_distance   | All rescuers (getting closer)              |
+| Tree collision           | -1.0                    | Colliding rescuer                          |
+| Boundary violation       | -1.0                    | Violating rescuer                          |
+| Agent collision          | -5.0                    | Both colliding rescuers                    |
 
 ### Termination Conditions
 
@@ -249,17 +149,46 @@ position = position + velocity
 
 ### Environment Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `num_rescuers` | 2 | Number of rescuer agents |
-| `num_victims` | 2 | Number of victim entities |
-| `num_trees` | 5 | Number of obstacle trees |
-| `num_safe_zones` | 4 | Number of safe zones (always at corners) |
-| `max_cycles` | 200 | Maximum steps per episode |
-| `vision_radius` | 0.5 | Maximum observation distance |
-| `rescue_radius` | 0.15 | Distance threshold for rescuing |
-| `follow_radius` | 0.2 | Distance threshold for victim commitment |
-| `world_size` | 2.0 | World bounds ([-1, 1] range) |
+| Parameter          | Default | Description                              |
+| ------------------ | ------- | ---------------------------------------- |
+| `num_rescuers`   | 2       | Number of rescuer agents                 |
+| `num_victims`    | 2       | Number of victim entities                |
+| `num_trees`      | 5       | Number of obstacle trees                 |
+| `num_safe_zones` | 4       | Number of safe zones (always at corners) |
+| `max_cycles`     | 200     | Maximum steps per episode                |
+| `vision_radius`  | 0.5     | Maximum observation distance             |
+| `rescue_radius`  | 0.15    | Distance threshold for rescuing          |
+| `follow_radius`  | 0.2     | Distance threshold for victim commitment |
+| `world_size`     | 2.0     | World bounds ([-1, 1] range)             |
+
+### Environment Features
+
+1. **Multi-Agent Coordination**
+
+   - Multiple rescuers work together to rescue victims
+   - Decentralized policy execution (each agent uses local observations)
+   - Centralized value function for better credit assignment
+2. **Victim Commitment System**
+
+   - Victims commit to rescuers when approached (within `follow_radius`)
+   - Hysteresis prevents rapid switching between rescuers
+   - Victims follow committed rescuers until rescued or rescuer moves away
+3. **Vision and Occlusion**
+
+   - Limited vision radius for realistic observation constraints
+   - Tree obstacles block line-of-sight
+   - Masked observations for non-visible entities
+4. **Physics Simulation**
+
+   - Velocity-based movement with acceleration actions
+   - Collision detection and response (walls, trees, agents)
+   - Soft repulsion between agents to prevent clustering
+5. **Rendering**
+
+   - Real-time visualization using Pygame
+   - Color-coded victims and safe zones by type
+   - Vision radius visualization
+   - Episode recording support
 
 ## Training
 
@@ -289,32 +218,36 @@ Key training parameters (configurable in `conf/config.yaml`):
 ```yaml
 train:
   active: false
-  total_timesteps: 102400      # Total environment steps
-  batch_size: 2048             # Minibatch size for PPO updates
-  n_epochs: 20                 # PPO update epochs per batch
-  learning_rate: 0.001         # Adam optimizer learning rate
-  seed: 0                      # Random seed
-  render_mode: null            # Rendering during training (usually None)
+  total_timesteps: 102400 # Total environment steps
+  batch_size: 2048 # Minibatch size for PPO updates
+  n_epochs: 20 # PPO update epochs per batch
+  learning_rate: 0.001 # Adam optimizer learning rate
+  seed: 0 # Random seed
+  render_mode: null # Rendering during training (usually None)
 ```
 
 ### Training Examples
 
 **Basic training:**
+
 ```bash
 python main.py train.active=true
 ```
 
 **Extended training with more steps:**
+
 ```bash
 python main.py train.active=true train.total_timesteps=500000
 ```
 
 **Training with custom environment:**
+
 ```bash
 python main.py train.active=true env.victims=12 env.rescuers=6 env.trees=8
 ```
 
 **Training without TensorBoard logging:**
+
 ```bash
 python main.py train.active=true tensorboard.enabled=false
 ```
@@ -328,6 +261,7 @@ python main.py tensorboard.active=true
 ```
 
 Key metrics logged:
+
 - `train/loss/objective`: PPO clipped objective loss
 - `train/loss/critic`: Value function loss
 - `train/loss/entropy`: Entropy bonus
@@ -338,7 +272,7 @@ Key metrics logged:
 
 ### Evaluation Process
 
-1. **Model Loading**: Loads checkpoint (auto-detects latest if not specified)
+1. **Model Loading**: Loads checkpoint latest --input
 2. **Environment Setup**: Creates environment with saved configuration
 3. **Policy Execution**: Runs episodes with trained policy
 4. **Metric Collection**: Tracks rewards, steps, rescues, etc.
@@ -349,23 +283,26 @@ Key metrics logged:
 ```yaml
 eval:
   active: false
-  games: 10                    # Number of episodes to evaluate
-  render_mode: "human"         # Rendering mode ("human" or null)
+  games: 10 # Number of episodes to evaluate
+  render_mode: "human" # Rendering mode ("human" or null)
 ```
 
 ### Evaluation Examples
 
 **Basic evaluation:**
+
 ```bash
 python main.py eval.active=true
 ```
 
 **Evaluation with rendering:**
+
 ```bash
 python main.py eval.active=true eval.render_mode=human eval.games=5
 ```
 
 **Evaluate specific checkpoint:**
+
 ```bash
 python main.py eval.active=true eval.model_path=logs/checkpoint.pt
 ```
@@ -373,11 +310,69 @@ python main.py eval.active=true eval.model_path=logs/checkpoint.pt
 ### Evaluation Metrics
 
 Logged metrics include:
+
 - `eval/episode_reward`: Total reward per episode
 - `eval/episode_steps`: Steps per episode
 - `eval/mean_reward_per_step`: Average reward per step
 - `eval/mean_episode_reward`: Mean reward across episodes
 - `eval/mean_episode_steps`: Mean episode length
+
+## Architecture
+
+### Environment Architecture
+
+```
+SearchAndRescueEnv (PettingZoo ParallelEnv)
+    ├── Entity Management
+    │   ├── Rescuers (agents)
+    │   ├── Victims (environmental entities)
+    │   ├── Trees (obstacles)
+    │   └── Safe Zones (goals)
+    ├── Physics System
+    │   ├── Movement (velocity-based)
+    │   ├── Collision Detection
+    │   └── Boundary Handling
+    ├── Vision System
+    │   ├── Distance Checking
+    │   └── Occlusion Detection
+    ├── Commitment System
+    │   ├── Victim Assignment
+    │   └── Following Behavior
+    └── Reward Computation
+        ├── Rescue Rewards
+        ├── Distance Shaping
+        └── Penalties
+```
+
+### Training Architecture
+
+```
+Training Pipeline
+    ├── Environment (SearchAndRescueEnv)
+    ├── Policy Network (Decentralized Actor)
+    ├── Value Network (Centralized Critic)
+    ├── Data Collector (SyncDataCollector)
+    ├── Replay Buffer (LazyTensorStorage)
+    ├── PPO Loss Module (ClipPPOLoss)
+    ├── Optimizer (Adam)
+    └── Logger (TensorBoard)
+```
+
+### Model Architecture
+
+**Policy Network:**
+
+- Input: Local observation `[batch, n_agents, obs_dim]`
+- Architecture: 2-layer MLP, 64 units per layer, Tanh activation
+- Output: Location and scale for TanhNormal distribution
+- Parameters: Shared across agents (homogeneous)
+
+**Value Network:**
+
+- Input: All agent observations `[batch, n_agents, obs_dim]`
+- Architecture: 2-layer MLP, 128 units per layer, Tanh activation
+- Output: State value `[batch, n_agents, 1]`
+- Centralized: True (sees all observations)
 
 ## Configuration
 
@@ -437,211 +432,34 @@ python main.py train.active=true tensorboard.enabled=false
 - `conf/config.yaml`: Main configuration file
 - Additional configs can be added to `conf/` directory
 
-## Architecture
-
-### Environment Architecture
+## Project Structure
 
 ```
-SearchAndRescueEnv (PettingZoo ParallelEnv)
-    ├── Entity Management
-    │   ├── Rescuers (agents)
-    │   ├── Victims (environmental entities)
-    │   ├── Trees (obstacles)
-    │   └── Safe Zones (goals)
-    ├── Physics System
-    │   ├── Movement (velocity-based)
-    │   ├── Collision Detection
-    │   └── Boundary Handling
-    ├── Vision System
-    │   ├── Distance Checking
-    │   └── Occlusion Detection
-    ├── Commitment System
-    │   ├── Victim Assignment
-    │   └── Following Behavior
-    └── Reward Computation
-        ├── Rescue Rewards
-        ├── Distance Shaping
-        └── Penalties
+.
+├── src/                      # Source code
+│   ├── __init__.py
+│   ├── main.py               # Main entry point (Hydra CLI)
+│   ├── sar_env.py            # SearchAndRescueEnv implementation
+│   ├── models.py             # Neural network model factories
+│   ├── train.py              # Training pipeline
+│   ├── eval.py               # Evaluation pipeline
+│   └── logger.py             # TensorBoard logging utilities
+|   |── curriculum.py         # Curriculum learning utilities
+├── tests/                    # Test suite
+│   ├── conftest.py           # Pytest configuration
+│   ├── test_env_smoke.py     # Environment smoke tests
+│   └── test_vision.py        # Vision system tests
+├── conf/                     # Configuration files
+│   └── config.yaml           # Main Hydra configuration
+├── docker/                   # Docker support
+│   └── Dockerfile            # Container definition
+├── images/                   # Documentation images/videos
+├── .github/workflows/        # CI/CD workflows
+├── requirements.txt          # Python dependencies
+├── Makefile                  # Build automation
+├── README.md                 # This file
+└── Documentation.pdf         # Detailed project documentation
 ```
-
-### Training Architecture
-
-```
-Training Pipeline
-    ├── Environment (SearchAndRescueEnv)
-    ├── Policy Network (Decentralized Actor)
-    ├── Value Network (Centralized Critic)
-    ├── Data Collector (SyncDataCollector)
-    ├── Replay Buffer (LazyTensorStorage)
-    ├── PPO Loss Module (ClipPPOLoss)
-    ├── Optimizer (Adam)
-    └── Logger (TensorBoard)
-```
-
-### Model Architecture
-
-**Policy Network:**
-- Input: Local observation `[batch, n_agents, obs_dim]`
-- Architecture: 2-layer MLP, 64 units per layer, Tanh activation
-- Output: Location and scale for TanhNormal distribution
-- Parameters: Shared across agents (homogeneous)
-
-**Value Network:**
-- Input: All agent observations `[batch, n_agents, obs_dim]`
-- Architecture: 2-layer MLP, 128 units per layer, Tanh activation
-- Output: State value `[batch, n_agents, 1]`
-- Centralized: True (sees all observations)
-
-## API Documentation
-
-### Main Entry Point
-
-#### `main.main(cfg: DictConfig)`
-
-Main entry point for training and evaluation. Uses Hydra for configuration management.
-
-**Modes:**
-- Training: `train.active=true`
-- Evaluation: `eval.active=true`
-- TensorBoard: `tensorboard.active=true`
-
-### Environment
-
-#### `SearchAndRescueEnv`
-
-Multi-agent search and rescue environment.
-
-**Key Methods:**
-- `reset(seed, options)`: Reset environment to initial state
-- `step(actions)`: Execute one environment step
-- `render()`: Render current state
-- `close()`: Clean up resources
-
-**See `src/sar_env.py` for complete API documentation.**
-
-### Training
-
-#### `train.train(...)`
-
-Train a multi-agent policy using MAPPO.
-
-**Parameters:**
-- `steps`: Total environment steps
-- `batch_size`: Minibatch size
-- `learning_rate`: Optimizer learning rate
-- `num_epochs`: PPO update epochs
-- `frames_per_batch`: Steps per batch
-- `seed`: Random seed
-- `save_folder`: Log directory
-- `enable_logging`: Enable TensorBoard
-- `**env_kwargs`: Environment parameters
-
-**See `src/train.py` for complete API documentation.**
-
-### Evaluation
-
-#### `evaluate.evaluate(...)`
-
-Evaluate a trained policy.
-
-**Parameters:**
-- `model_path`: Checkpoint path (None for auto-detect)
-- `save_folder`: Log directory
-- `num_games`: Number of episodes
-- `enable_logging`: Enable TensorBoard
-- `**env_kwargs`: Environment parameters
-
-**See `src/eval.py` for complete API documentation.**
-
-### Models
-
-#### `make_policy(env, num_rescuers, device)`
-
-Create a probabilistic policy network.
-
-**Returns:** `ProbabilisticActor` instance
-
-#### `make_critic(env, num_rescuers, device)`
-
-Create a value network.
-
-**Returns:** `ValueOperator` instance
-
-**See `src/models.py` for complete API documentation.**
-
-## Development
-
-### Code Style
-
-The project uses:
-- **Black**: Code formatting (line length 88)
-- **flake8**: Linting
-- **Pre-commit hooks**: Automated checks
-
-### Setting Up Development Environment
-
-1. **Install pre-commit hooks:**
-
-   ```bash
-   pip install pre-commit
-   pre-commit install
-   ```
-
-2. **Run code formatting:**
-
-   ```bash
-   black src/ tests/
-   ```
-
-3. **Run linting:**
-
-   ```bash
-   flake8 src/ tests/
-   ```
-
-### Project Guidelines
-
-- Follow PEP 8 style guidelines
-- Use type hints where possible
-- Write docstrings for all public functions and classes
-- Keep functions focused and modular
-- Add tests for new features
-
-## Testing
-
-### Running Tests
-
-Run all tests:
-
-```bash
-pytest
-```
-
-Run specific test file:
-
-```bash
-pytest tests/test_env_smoke.py
-```
-
-Run with coverage:
-
-```bash
-pytest --cov=src --cov-report=html
-```
-
-### Test Structure
-
-- `tests/conftest.py`: Pytest fixtures and configuration
-- `tests/test_env_smoke.py`: Environment smoke tests
-- `tests/test_vision.py`: Vision system tests
-
-### Writing Tests
-
-Tests use pytest and should:
-- Be placed in `tests/` directory
-- Use descriptive names starting with `test_`
-- Use fixtures from `conftest.py` when possible
-- Test both success and failure cases
 
 ## Docker Support
 
@@ -694,11 +512,195 @@ docker run --rm -it \
 - Volume mount: `search_rescue_logs` for persistent logs
 - Entry point: `python main.py`
 
+## Development
+
+### Prerequisites
+
+- Python 3.13 or higher
+- pip package manager
+- (Optional) CUDA-capable GPU for faster training
+
+### Installation
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/adorjannm/student-search.git
+   cd student-search
+   ```
+2. **Create a virtual environment (recommended):**
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+3. **Install dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+See `requirements.txt` for the complete list of dependencies with versions.
+
+### Code Style
+
+The project uses:
+
+- **Black**: Code formatting (line length 88)
+- **flake8**: Linting
+- **Pre-commit hooks**: Automated checks
+
+### Setting Up Development Environment
+
+1. **Install pre-commit hooks:**
+
+   ```bash
+   pip install pre-commit
+   pre-commit install
+   ```
+2. **Run code formatting:**
+
+   ```bash
+   black src/ tests/
+   ```
+3. **Run linting:**
+
+   ```bash
+   flake8 src/ tests/
+   ```
+
+### Project Guidelines
+
+- Follow PEP 8 style guidelines
+- Use type hints where possible
+- Write docstrings for all public functions and classes
+- Keep functions focused and modular
+- Add tests for new features
+
+## Testing
+
+### Running Tests
+
+Run all tests:
+
+```bash
+pytest
+```
+
+Run specific test file:
+
+```bash
+pytest tests/test_env_smoke.py
+```
+
+Run with coverage:
+
+```bash
+pytest --cov=src --cov-report=html
+```
+
+### Test Structure
+
+- `tests/conftest.py`: Pytest fixtures and configuration
+- `tests/test_env_smoke.py`: Environment smoke tests
+- `tests/test_vision.py`: Vision system tests
+
+### Writing Tests
+
+Tests use pytest and should:
+
+- Be placed in `tests/` directory
+- Use descriptive names starting with `test_`
+- Use fixtures from `conftest.py` when possible
+- Test both success and failure cases
+
+## API Documentation
+
+### Main Entry Point
+
+#### `main.main(cfg: DictConfig)`
+
+Main entry point for training and evaluation. Uses Hydra for configuration management.
+
+**Modes:**
+
+- Training: `train.active=true`
+- Evaluation: `eval.active=true`
+- TensorBoard: `tensorboard.active=true`
+
+### Environment
+
+#### `SearchAndRescueEnv`
+
+Multi-agent search and rescue environment.
+
+**Key Methods:**
+
+- `reset(seed, options)`: Reset environment to initial state
+- `step(actions)`: Execute one environment step
+- `render()`: Render current state
+- `close()`: Clean up resources
+
+**See `src/sar_env.py` for complete API documentation.**
+
+### Training
+
+#### `train.train(...)`
+
+Train a multi-agent policy using MAPPO.
+
+**Parameters:**
+
+- `steps`: Total environment steps
+- `batch_size`: Minibatch size
+- `learning_rate`: Optimizer learning rate
+- `num_epochs`: PPO update epochs
+- `frames_per_batch`: Steps per batch
+- `seed`: Random seed
+- `save_folder`: Log directory
+- `enable_logging`: Enable TensorBoard
+- `**env_kwargs`: Environment parameters
+
+**See `src/train.py` for complete API documentation.**
+
+### Evaluation
+
+#### `evaluate.evaluate(...)`
+
+Evaluate a trained policy.
+
+**Parameters:**
+
+- `model_path`: Checkpoint path (None for auto-detect)
+- `save_folder`: Log directory
+- `num_games`: Number of episodes
+- `enable_logging`: Enable TensorBoard
+- `**env_kwargs`: Environment parameters
+
+**See `src/eval.py` for complete API documentation.**
+
+### Models
+
+#### `make_policy(env, num_rescuers, device)`
+
+Create a probabilistic policy network.
+
+**Returns:** `ProbabilisticActor` instance
+
+#### `make_critic(env, num_rescuers, device)`
+
+Create a value network.
+
+**Returns:** `ValueOperator` instance
+
+**See `src/models.py` for complete API documentation.**
+
 ## Documentation
 
 ### Project Documentation
 
 For detailed documentation including:
+
 - Environment design and implementation details
 - Reward system explanation
 - Training pipeline architecture
@@ -743,16 +745,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [TorchRL Documentation](https://pytorch.org/rl/)
 - [Hydra Documentation](https://hydra.cc/)
 - [PyTorch Documentation](https://pytorch.org/docs/)
-
-## Citation
-
-If you use this project in your research, please cite:
-
-```bibtex
-@software{search_rescue_2024,
-  title={Search \& Rescue: Multi-Agent Reinforcement Learning},
-  author={Nagy-Mohos, Adorján and Kovács, Máté and Baranyi, Sándor},
-  year={2024},
-  url={https://gitlab.inf.elte.hu/student-projects-and-thesis/collective-intelligence/search}
-}
-```

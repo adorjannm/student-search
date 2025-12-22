@@ -92,9 +92,9 @@ def make_policy(
         - Uses TanhNormal distribution for bounded continuous actions
 
     Note:
-        The policy is strictly decentralized (centralised=False) meaning
-        each agent's action depends only on its own observation. This
-        encourages local decision-making without explicit communication.
+        The policy is strictly decentralized, meaning each agent's action
+        depends only on its own observation. This configuration discourages
+        reliance on explicit inter-agent communication.
     """
     policy_net = nn.Sequential(
         MultiAgentMLP(
@@ -209,9 +209,9 @@ def make_critic(
         - Uses centralized observations (all agents' observations)
 
     Note:
-        The critic is centralized (centralised=True) which is standard for
-        MAPPO. This allows better value estimation while maintaining
-        decentralized policy execution.
+        The critic is centralized, which is standard for MAPPO. This allows
+        better value estimation while maintaining decentralized policy
+        execution.
     """
 
     critic_net = MultiAgentMLP(

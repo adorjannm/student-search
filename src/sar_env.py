@@ -2,7 +2,7 @@
 Search and Rescue Multi-Agent Environment.
 
 This module implements a multi-agent reinforcement learning environment for
-search and rescue operations. Rescuers (adversarial agents) must guide victims
+search and rescue operations. Rescuers (cooperative agents) must guide victims
 to their designated safe zones while navigating around obstacles (trees).
 
 The environment features:
@@ -32,7 +32,7 @@ class SearchAndRescueEnv(ParallelEnv):
     Multi-agent Search and Rescue environment.
 
     This environment simulates a search-and-rescue operation where rescuers
-    (adversarial agents) must guide victims to designated safe zones. The
+    (cooperative agents) must guide victims to designated safe zones. The
     environment includes obstacles (trees) that block vision and movement,
     and implements a commitment system where victims follow rescuers when
     approached.
@@ -146,8 +146,7 @@ class SearchAndRescueEnv(ParallelEnv):
             num_safe_zones: Number of safe zones. Should be 4 (corners), but
                 can be configured. Each safe zone has a unique type (0-3).
             max_cycles: Maximum number of steps per episode before truncation.
-            continuous_actions: Whether to use continuous actions (currently
-                always True internally, this parameter is for API compatibility).
+            continuous_actions: Whether to use continuous actions.
             vision_radius: Maximum distance at which agents can observe entities.
                 Entities beyond this radius or occluded by trees are masked.
             seed: Random seed for environment initialization. If None, uses
@@ -368,9 +367,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
         return self._get_obs(), {a: {} for a in self.agents}
 
-    def _is_visible(
-        self, observer_pos, target_pos, target_radius, exclude_tree_idx=None
-    ) -> bool:
+    def _is_visible(self, observer_pos, target_pos, exclude_tree_idx=None) -> bool:
         """
         Check if a target is visible from an observer position.
 
@@ -385,7 +382,7 @@ class SearchAndRescueEnv(ParallelEnv):
         Args:
             observer_pos: 2D position of the observer (rescuer agent).
             target_pos: 2D position of the target entity (victim or tree).
-            target_radius: Radius of the target entity (for collision detection).
+            exclude_tree_idx: Optional index of a tree to exclude from occlusion
 
         Returns:
             True if the target is visible (within range and not occluded),
@@ -443,36 +440,36 @@ class SearchAndRescueEnv(ParallelEnv):
 
     def _get_obs(self) -> dict:
         """
-        Compute observations for all active agents.
+          Compute observations for all active agents.
 
-        Observations are computed relative to each agent's position and include:
-        - Self state (velocity, position)
-        - Agent ID (one-hot encoding for symmetry breaking)
-        - Safe zones (global knowledge, always visible)
-        - Trees (masked if not visible or occluded)
-        - Victims (masked if not visible, occluded, or already saved)
+          Observations are computed relative to each agent's position and include:
+          - Self state (velocity, position)
+          - Agent ID (one-hot encoding for symmetry breaking)
+          - Safe zones (global knowledge, always visible)
+          - Trees (masked if not visible or occluded)
+          - Victims (masked if not visible, occluded, or already saved)
 
-        Masking is done by setting relative positions to [0.0, 0.0] and
-        type to -1.0 for victims (indicating not visible).
+        Masking is done by setting tree relative positions to [0.0, 0.0] and
+          victim relative positions and types to [0.0, 0.0, -1.0] (indicating not visible).
 
-        Returns:
-            Dictionary mapping agent names to observation arrays.
-            Each observation is a numpy array of shape (obs_dim,) containing:
-            - [0:2]: Self velocity (vx, vy)
-            - [2:4]: Self position (x, y)
-            - [4:4+num_rescuers]: Agent ID one-hot encoding
-            - [4+num_rescuers:4+num_rescuers+num_safe_zones*3]: Safe zones
-                (relative_x, relative_y, type) for each safe zone
-            - [safe_zones_end:safe_zones_end+num_trees*2]: Trees
-                (relative_x, relative_y) for each tree (masked if not visible)
-            - [trees_end:trees_end+num_victims*3]: Victims
-                (relative_x, relative_y, type) for each victim
-                (masked as [0, 0, -1] if not visible or saved)
+          Returns:
+              Dictionary mapping agent names to observation arrays.
+              Each observation is a numpy array of shape (obs_dim,) containing:
+              - [0:2]: Self velocity (vx, vy)
+              - [2:4]: Self position (x, y)
+              - [4:4+num_rescuers]: Agent ID one-hot encoding
+              - [4+num_rescuers:4+num_rescuers+num_safe_zones*3]: Safe zones
+                  (relative_x, relative_y, type) for each safe zone
+              - [safe_zones_end:safe_zones_end+num_trees*2]: Trees
+                  (relative_x, relative_y) for each tree (masked if not visible)
+              - [trees_end:trees_end+num_victims*3]: Victims
+                  (relative_x, relative_y, type) for each victim
+                  (masked as [0, 0, -1] if not visible or saved)
 
-        Note:
-            Other rescuers are intentionally excluded from observations to
-            focus learning on the rescue task rather than agent coordination
-            through explicit observation.
+          Note:
+              Other rescuers are intentionally excluded from observations to
+              focus learning on the rescue task rather than agent coordination
+              through explicit observation.
         """
         observations = {}
         for i, agent in enumerate(self.agents):
@@ -777,7 +774,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
         This method renders the current state of the environment using pygame.
         It displays:
-        - Safe zones (colored rectangles at corners)
+        - Safe zones (colored circles with transparency)
         - Trees (gray circles)
         - Victims (colored circles matching their type)
         - Rescuers (white circles with outlines)
