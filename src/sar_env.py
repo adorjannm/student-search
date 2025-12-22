@@ -321,20 +321,11 @@ class SearchAndRescueEnv(ParallelEnv):
 
             # 4. Trees (partial observability): mask rel_pos when not visible
             for t_i in range(self.max_trees):
-                if t_i < self.num_trees:
-                    visible = float(
-                        self._is_visible(
-                            my_pos,
-                            self.tree_pos[t_i],
-                            self.tree_radius,
-                            exclude_tree_idx=t_i,
-                        )
-                    )
-                    if visible > 0.5:
-                        rel_pos = self.tree_pos[t_i] - my_pos
-                        obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
-                    else:
-                        obs_vec.extend([0.0, 0.0, 0.0])
+                if t_i < self.num_trees and self._is_visible(
+                    my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
+                ):
+                    rel_pos = self.tree_pos[t_i] - my_pos
+                    obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
                 else:
                     obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
 
