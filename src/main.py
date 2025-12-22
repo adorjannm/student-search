@@ -57,6 +57,16 @@ def main(cfg: DictConfig):
         "continuous_actions": cfg.env.continuous_actions,
         "vision_radius": cfg.env.vision_radius,
         "randomize_safe_zones": cfg.env.get("randomize_safe_zones", False),
+        "n_closest_landmarks": cfg.env.get("n_closest_landmarks", 3),
+        "energy_enabled": cfg.env.energy.enabled,
+        "max_energy": cfg.env.energy.max_energy,
+        "movement_cost_coeff": cfg.env.energy.movement_cost_coeff,
+        "idle_cost": cfg.env.energy.idle_cost,
+        "energy_depleted_action_scale": cfg.env.energy.depleted_action_scale,
+        "num_chargers": cfg.env.energy.num_chargers,
+        "recharge_radius": cfg.env.energy.recharge_radius,
+        "recharge_rate": cfg.env.energy.recharge_rate,
+        "randomize_chargers": cfg.env.energy.randomize_chargers,
     }
 
     if cfg.train.active:

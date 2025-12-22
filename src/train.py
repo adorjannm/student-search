@@ -111,7 +111,7 @@ def train(
         critic_network=critic,
         clip_epsilon=0.2,
         entropy_bonus=True,
-        entropy_coeff=0.1,
+        entropy_coeff=0.001,
         normalize_advantage=False,  # Disable - causes shape mismatch in multi-agent
     )
     loss_module.set_keys(
@@ -294,6 +294,16 @@ def train(
         "continuous_actions": env.base_env.is_continuous,
         "vision_radius": env.base_env.vision_radius,
         "randomize_safe_zones": env.base_env.randomize_safe_zones,
+        "n_closest_landmarks": getattr(env.base_env, "n_closest_landmarks", 3),
+        "energy_enabled": env.base_env.energy_enabled,
+        "max_energy": env.base_env.max_energy,
+        "movement_cost_coeff": env.base_env.movement_cost_coeff,
+        "idle_cost": env.base_env.idle_cost,
+        "energy_depleted_action_scale": env.base_env.energy_depleted_action_scale,
+        "num_chargers": env.base_env.num_chargers,
+        "recharge_radius": env.base_env.recharge_radius,
+        "recharge_rate": env.base_env.recharge_rate,
+        "randomize_chargers": env.base_env.randomize_chargers,
     }
 
     torch.save(

@@ -13,11 +13,9 @@ import numpy as np
 
 from conftest import (
     get_obs_slices,
-    get_tree_obs,
+    get_landmark_obs,
     get_victim_obs,
-    get_safe_zone_obs,
     is_masked_victim,
-    is_masked_tree,
     place_agent,
     place_victim,
     place_tree,
@@ -37,8 +35,8 @@ class TestBasicOcclusion:
     """Tests for basic occlusion behavior."""
 
     def test_tree_blocks_victim(self, make_simple_env):
-        """Trees block vision to entities behind them."""
-        env = make_simple_env(seed=123)
+        """Trees block vision to entities behind them; victim should be masked."""
+        env = make_simple_env(seed=123, vision_radius=10.0, n_closest_landmarks=3)
         env.reset()
         agent = env.agents[0]
 
@@ -51,22 +49,12 @@ class TestBasicOcclusion:
         obs_vec = obs[agent]
         slices = get_obs_slices(env)
 
-        # Tree should be visible
-        tree_obs = get_tree_obs(obs_vec, slices, 0)
-        expected_tree_rel = env.tree_pos[0] - env.rescuer_pos[0]
-        assert_obs_matches(
-            tree_obs[:2], expected_tree_rel, msg="Tree should be visible"
-        )
-        assert tree_obs[2] == 1.0, "Tree visible bit should be 1.0"
-
         # Victim should be blocked (masked)
         victim_obs = get_victim_obs(obs_vec, slices, 0)
         assert is_masked_victim(victim_obs), "Victim should be blocked by tree"
-
-        # Verify with _is_visible
         assert_not_visible(env, env.rescuer_pos[0], env.victim_pos[0], env.agent_size)
 
-        # Move tree away: victim should be visible
+        # Move tree away: victim should be visible now
         place_tree(env, 0, (0.0, 0.8))
         obs = env._get_obs()
         obs_vec = obs[agent]
@@ -74,9 +62,13 @@ class TestBasicOcclusion:
         victim_obs = get_victim_obs(obs_vec, slices, 0)
         expected_rel = env.victim_pos[0] - env.rescuer_pos[0]
         assert_obs_matches(
-            victim_obs[:2], expected_rel[:2], msg="Victim should be visible now"
+            victim_obs[:2],
+            expected_rel[:2],
+            scale=env.world_size,
+            msg="Victim should be visible now",
         )
         assert victim_obs[2] == env.victim_types[0], "Victim type should match"
+        assert victim_obs[3] == 1.0, "Victim visible bit should be 1.0"
 
     def test_tree_behind_observer_no_block(self, env_simple):
         """Trees behind observer don't block vision."""
@@ -134,40 +126,6 @@ class TestBasicOcclusion:
 
 class TestVisionRadius:
     """Tests for vision radius behavior."""
-
-    def test_entities_beyond_radius_masked(self, make_simple_env):
-        """Entities beyond vision radius are masked."""
-        env = make_simple_env(vision_radius=0.5)
-        env.reset()
-        agent = env.agents[0]
-
-        place_agent(env, 0, (0.0, 0.0))
-        place_victim(env, 0, (0.2, 0.0))
-        place_tree(env, 0, (0.3, 0.0))
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-        slices = get_obs_slices(env)
-
-        # Within radius - should be visible
-        victim_obs = get_victim_obs(obs_vec, slices, 0)
-        assert not is_masked_victim(victim_obs), "Victim should be visible"
-
-        tree_obs = get_tree_obs(obs_vec, slices, 0)
-        assert not is_masked_tree(tree_obs), "Tree should be visible"
-
-        # Move beyond radius
-        place_victim(env, 0, (0.7, 0.0))
-        place_tree(env, 0, (0.8, 0.0))
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-
-        victim_obs = get_victim_obs(obs_vec, slices, 0)
-        assert is_masked_victim(victim_obs), "Victim should be masked (too far)"
-
-        tree_obs = get_tree_obs(obs_vec, slices, 0)
-        assert is_masked_tree(tree_obs), "Tree should be masked (too far)"
 
     def test_exactly_at_radius_visible(self, make_simple_env):
         """Entity exactly at vision radius is visible."""
@@ -294,47 +252,6 @@ class TestMultipleTrees:
             msg="Chain of trees should block",
         )
 
-    def test_tree_occludes_other_tree(self, make_simple_env):
-        """A tree can occlude another tree."""
-        env = make_simple_env(num_victims=0, num_trees=2)
-        env.reset()
-        agent = env.agents[0]
-
-        place_agent(env, 0, (-0.5, 0.0))
-        place_tree(env, 0, (0.0, 0.0))
-        place_tree(env, 1, (0.5, 0.0))
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-        slices = get_obs_slices(env)
-
-        # First tree visible
-        tree0_obs = get_tree_obs(obs_vec, slices, 0)
-        expected = env.tree_pos[0] - env.rescuer_pos[0]
-        assert_obs_matches(tree0_obs[:2], expected, msg="First tree should be visible")
-        assert tree0_obs[2] == 1.0, "First tree visible bit should be 1.0"
-
-        # Second tree blocked
-        tree1_obs = get_tree_obs(obs_vec, slices, 1)
-        assert is_masked_tree(tree1_obs), "Second tree should be blocked"
-
-        # Verify with _is_visible
-        assert_visible(
-            env,
-            env.rescuer_pos[0],
-            env.tree_pos[0],
-            env.tree_radius,
-            exclude_tree_idx=0,
-            msg="First tree visible (excludes itself)",
-        )
-        assert_not_visible(
-            env,
-            env.rescuer_pos[0],
-            env.tree_pos[1],
-            env.tree_radius,
-            msg="Second tree blocked by first",
-        )
-
 
 # =============================================================================
 # Victim Masking Tests
@@ -372,44 +289,6 @@ class TestVictimMasking:
 
 
 # =============================================================================
-# Safe Zone Tests
-# =============================================================================
-
-
-class TestSafeZones:
-    """Tests for safe zone observation behavior."""
-
-    def test_safe_zones_visibility_depends_on_distance(self, make_simple_env):
-        """Safe zones are masked based on distance and occlusion."""
-        env = make_simple_env(num_victims=0, num_trees=1, vision_radius=0.3)
-        env.reset()
-        agent = env.agents[0]
-
-        place_agent(env, 0, (0.0, 0.0))
-        place_tree(env, 0, (0.1, 0.0))
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-        slices = get_obs_slices(env)
-
-        # Check each safe zone
-        for i in range(env.num_safe_zones):
-            zone_obs = get_safe_zone_obs(obs_vec, slices, i)
-            dist = np.linalg.norm(env.safezone_pos[i] - env.rescuer_pos[0])
-
-            if dist <= env.vision_radius and check_visibility(
-                env, env.rescuer_pos[0], env.safezone_pos[i], env.safe_zone_radius
-            ):
-                expected_rel = env.safezone_pos[i] - env.rescuer_pos[0]
-                assert_obs_matches(
-                    zone_obs[:2],
-                    expected_rel,
-                    msg=f"Safe zone {i} should have correct relative position",
-                )
-                assert zone_obs[2] == float(env.safe_zone_types[i])
-
-
-# =============================================================================
 # Observation Structure Tests
 # =============================================================================
 
@@ -431,9 +310,10 @@ class TestObservationStructure:
         expected_obs_dim = (
             4  # vel(2) + pos(2)
             + env.num_rescuers  # agent ID one-hot
-            + (env.num_safe_zones * 3)  # safe zones
-            + (env.max_trees * 3)  # trees (rel_x, rel_y, visible_bit)
-            + (env.num_victims * 3)  # victims
+            + (1 if getattr(env, "energy_enabled", False) else 0)  # energy
+            + (env.n_closest_landmarks * 5)  # landmarks
+            + (env.num_victims * 4)  # victims
+            + ((env.num_rescuers - 1) * 3)  # other rescuers
         )
 
         for agent in env.agents:
@@ -450,42 +330,6 @@ class TestObservationStructure:
             agent_id = obs_vec[slices["agent_id"]]
             assert agent_id[agent_idx] == 1.0
             assert np.sum(agent_id) == 1.0
-
-    def test_relative_positions_correct(self, make_simple_env):
-        """Relative positions in observations are calculated correctly."""
-        env = make_simple_env(num_victims=2, num_trees=2, num_safe_zones=4)
-        env.reset()
-        agent = env.agents[0]
-
-        place_agent(env, 0, (0.2, 0.3))
-        place_victim(env, 0, (0.5, 0.4))
-        place_victim(env, 1, (0.1, 0.1))
-        place_tree(env, 0, (0.3, 0.35))
-        place_tree(env, 1, (-0.2, -0.1))
-        env.victim_saved[0] = False
-        env.victim_saved[1] = False
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-        slices = get_obs_slices(env)
-
-        # Self position should be absolute
-        self_pos = obs_vec[slices["self_pos"]]
-        assert_obs_matches(
-            self_pos, env.rescuer_pos[0], msg="Self position should be absolute"
-        )
-
-        # Check victim relative positions if visible
-        if check_visibility(env, env.rescuer_pos[0], env.victim_pos[0], env.agent_size):
-            victim0_obs = get_victim_obs(obs_vec, slices, 0)
-            expected = env.victim_pos[0] - env.rescuer_pos[0]
-            assert_obs_matches(victim0_obs[:2], expected)
-
-        # Check tree relative positions if visible
-        if check_visibility(env, env.rescuer_pos[0], env.tree_pos[0], env.tree_radius):
-            tree0_obs = get_tree_obs(obs_vec, slices, 0)
-            expected = env.tree_pos[0] - env.rescuer_pos[0]
-            assert_obs_matches(tree0_obs[:2], expected)
 
 
 # =============================================================================
@@ -606,36 +450,6 @@ class TestEdgeCases:
             msg="Tree1 visible when tree0 excluded",
         )
 
-    def test_tree_self_visibility(self, make_simple_env):
-        """Trees can be visible using exclude_tree_idx for themselves."""
-        env = make_simple_env(num_victims=0, num_trees=2)
-        env.reset()
-        agent = env.agents[0]
-
-        place_agent(env, 0, (0.0, 0.0))
-        place_tree(env, 0, (0.2, 0.0))
-        place_tree(env, 1, (0.4, 0.0))
-
-        obs = env._get_obs()
-        obs_vec = obs[agent]
-        slices = get_obs_slices(env)
-
-        # Tree 0 should be visible (excludes itself)
-        tree0_obs = get_tree_obs(obs_vec, slices, 0)
-        expected = env.tree_pos[0] - env.rescuer_pos[0]
-        assert_obs_matches(tree0_obs[:2], expected, msg="Tree 0 should be visible")
-        assert tree0_obs[2] == 1.0, "Tree 0 visible bit should be 1.0"
-
-        # Verify with _is_visible
-        assert_visible(
-            env,
-            env.rescuer_pos[0],
-            env.tree_pos[0],
-            env.tree_radius,
-            exclude_tree_idx=0,
-            msg="Tree visible when excluding itself",
-        )
-
     def test_very_close_tree_to_observer(self, env_simple):
         """Tree very close to observer blocks vision."""
         env = env_simple
@@ -718,3 +532,121 @@ class TestEdgeCases:
                 assert is_masked_victim(
                     victim_obs
                 ), f"Blocked victim {v_idx} should be masked"
+
+
+# =============================================================================
+# Additional Edge Cases Tests
+# =============================================================================
+
+
+class TestVisionEdgeCases:
+    """Additional edge cases for vision logic."""
+
+    def test_zero_vision_radius_blocks_all(self, make_simple_env):
+        """Zero vision radius makes everything invisible."""
+        env = make_simple_env(vision_radius=0.0, num_trees=0)
+        env.reset()
+
+        place_agent(env, 0, (0.0, 0.0))
+        place_victim(env, 0, (0.01, 0.0))  # Very close
+
+        assert not check_visibility(
+            env, env.rescuer_pos[0], env.victim_pos[0], env.agent_size
+        )
+
+    def test_other_rescuer_visibility(self, make_simple_env):
+        """Other rescuers are visible/masked correctly in observations."""
+        env = make_simple_env(num_rescuers=2, num_trees=1)
+        env.reset()
+
+        place_agent(env, 0, (-0.5, 0.0))
+        place_agent(env, 1, (0.5, 0.0))
+        place_tree(env, 0, (0.0, 0.0))  # Block line of sight
+
+        obs = env._get_obs()
+        slices = get_obs_slices(env)
+
+        # Other rescuer should be masked (blocked)
+        other_slice = slices["other_agents"]
+        other_obs = obs[env.agents[0]][other_slice]
+        assert other_obs[2] == 0.0  # visible bit should be 0
+
+
+# =============================================================================
+# Closest Landmarks Tests
+# =============================================================================
+
+
+class TestClosestLandmarks:
+    def test_visible_tree_can_appear_in_landmarks(self, make_simple_env):
+        """
+        If a tree is visible and close enough, it should appear among the top-N closest landmarks.
+        Safe zones are always candidates; we place the tree much closer than the corners.
+        """
+        env = make_simple_env(
+            num_victims=0, num_trees=1, vision_radius=10.0, n_closest_landmarks=3
+        )
+        env.reset()
+        agent = env.agents[0]
+
+        place_agent(env, 0, (-0.5, 0.0))
+        place_tree(env, 0, (0.0, 0.0))
+
+        assert_visible(
+            env,
+            env.rescuer_pos[0],
+            env.tree_pos[0],
+            env.tree_radius,
+            exclude_tree_idx=0,
+            msg="Tree should be visible",
+        )
+
+        obs = env._get_obs()
+        obs_vec = obs[agent]
+        slices = get_obs_slices(env)
+
+        expected_tree_rel = (env.tree_pos[0] - env.rescuer_pos[0]) / env.world_size
+
+        found = False
+        for k in range(env.n_closest_landmarks):
+            lm = get_landmark_obs(obs_vec, slices, k)
+            if np.allclose(lm, expected_tree_rel, atol=1e-5):
+                found = True
+                break
+
+        assert found, "Expected the visible close tree to appear in landmarks"
+
+    def test_invisible_tree_does_not_appear_in_landmarks(self, make_simple_env):
+        """
+        Trees only enter landmark candidates if visible.
+        Put a tree behind an occluding tree -> blocked -> should not appear.
+        """
+        env = make_simple_env(
+            num_victims=0, num_trees=2, vision_radius=10.0, n_closest_landmarks=3
+        )
+        env.reset()
+        agent = env.agents[0]
+
+        place_agent(env, 0, (-0.5, 0.0))
+        place_tree(env, 0, (0.0, 0.0))  # occluder
+        place_tree(env, 1, (0.5, 0.0))  # should be blocked
+
+        assert_not_visible(
+            env,
+            env.rescuer_pos[0],
+            env.tree_pos[1],
+            env.tree_radius,
+            msg="Tree 1 should be blocked by tree 0",
+        )
+
+        obs = env._get_obs()
+        obs_vec = obs[agent]
+        slices = get_obs_slices(env)
+
+        expected_tree1_rel = (env.tree_pos[1] - env.rescuer_pos[0]) / env.world_size
+
+        for k in range(env.n_closest_landmarks):
+            lm = get_landmark_obs(obs_vec, slices, k)
+            assert not np.allclose(
+                lm, expected_tree1_rel, atol=1e-5
+            ), "Invisible (blocked) tree should not appear in landmarks"

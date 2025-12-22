@@ -28,7 +28,18 @@ class SearchAndRescueEnv(ParallelEnv):
         max_trees: Optional[
             int
         ] = None,  # For curriculum learning - fixes obs space size
+        n_closest_landmarks: int = 3,
+        energy_enabled: bool = True,
+        max_energy: float = 1.0,  # energy in [0, max_energy]
+        movement_cost_coeff: float = 0.01,  # cost per step scales with |action|
+        idle_cost: float = 0.001,  # base cost every step
+        energy_depleted_action_scale: float = 0.0,  # 0.0 -> can't move at 0 energy
+        num_chargers: int = 2,
+        recharge_radius: float = 0.12,
+        recharge_rate: float = 0.05,  # energy per step when in range
+        randomize_chargers: bool = True,
     ):
+
         self.num_rescuers = num_rescuers
         self.num_victims = num_victims
         self.num_trees = num_trees
@@ -37,6 +48,29 @@ class SearchAndRescueEnv(ParallelEnv):
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
         self.randomize_safe_zones = randomize_safe_zones
+        self.n_closest_landmarks = n_closest_landmarks
+
+        self.energy_enabled = energy_enabled
+        self.max_energy = float(max_energy)
+        self.movement_cost_coeff = float(movement_cost_coeff)
+        self.idle_cost = float(idle_cost)
+        self.energy_depleted_action_scale = float(energy_depleted_action_scale)
+
+        self.num_chargers = int(num_chargers)
+        self.recharge_radius = float(recharge_radius)
+        self.recharge_rate = float(recharge_rate)
+        self.randomize_chargers = bool(randomize_chargers)
+
+        # Visual size for chargers (rendering only)
+        self.charger_radius = 0.07
+
+        # Per-episode state
+        self.energy = np.zeros(self.num_rescuers, dtype=np.float32)
+        self.charger_pos = np.zeros((self.num_chargers, 2), dtype=np.float64)
+
+        # Metrics for energy system
+        self._recharge_events = 0
+        self._energy_depleted_steps = 0
 
         # For curriculum learning: use max_trees for obs space size, pad observations
         self.max_trees = max_trees if max_trees is not None else num_trees
@@ -76,22 +110,22 @@ class SearchAndRescueEnv(ParallelEnv):
         # Observation Space Calculation (Partial Observability with Vision Masking)
         # Layout per agent:
         # [self_vel(2), self_pos(2), agent_id(num_rescuers),
-        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx or -1 if masked),
-        #  trees(max_trees * 3: rel_x, rel_y, visible_bit),
-        #  victims(num_victims * 3: rel_x, rel_y, type_idx or -1 if masked)]
-        self.max_safe_zones = self.num_safe_zones  # kept for clarity
-
+        #  energy (normalized [0,1]),
+        #  landmarks(N * 5: rel_x, rel_y, visible_bit, is_safezone_bit, safezone_type),
+        #  victims(num_victims * 4: rel_x, rel_y, type_idx, visible_bit),
+        #  other_rescuers((num_rescuers - 1) * 3: rel_x, rel_y, visible_bit)]
         self.obs_dim = (
             2  # self_vel
             + 2  # self_pos
             + self.num_rescuers  # agent_id one-hot
-            + (self.max_safe_zones * 3)
-            + (self.max_trees * 3)
-            + (self.num_victims * 3)
+            + (1 if self.energy_enabled else 0)  # energy (normalized [0,1])
+            + (self.n_closest_landmarks * 5)
+            + (self.num_victims * 4)
+            + ((self.num_rescuers - 1) * 3)
         )
 
         # Build bounded observation space
-        rel_low, rel_high = -3.0, 3.0  # generous bound for relative deltas
+        rel_low, rel_high = -1.0, 1.0  # normalized relative deltas
         obs_low = []
         obs_high = []
 
@@ -107,20 +141,27 @@ class SearchAndRescueEnv(ParallelEnv):
         obs_low.extend([0.0] * self.num_rescuers)
         obs_high.extend([1.0] * self.num_rescuers)
 
-        # Safe zones: rel_x, rel_y, type (or -1 when masked)
-        for _ in range(self.max_safe_zones):
-            obs_low.extend([rel_low, rel_low, -1.0])
-            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
+        # Energy (normalized)
+        if self.energy_enabled:
+            obs_low.extend([0.0])
+            obs_high.extend([1.0])
 
-        # Trees: rel_x, rel_y (masked to 0), visible bit
-        for _ in range(self.max_trees):
+        # Landmarks: N closest (rel_x, rel_y, visible_bit, is_safezone_bit, safezone_type)
+        for _ in range(self.n_closest_landmarks):
+            obs_low.extend([rel_low, rel_low, 0.0, 0.0, 0.0])
+            obs_high.extend(
+                [rel_high, rel_high, 1.0, 1.0, float(self.num_safe_zones - 1)]
+            )
+
+        # Victims: rel_x, rel_y (normalized), type, visible bit
+        for _ in range(self.num_victims):
+            obs_low.extend([rel_low, rel_low, 0.0, 0.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1), 1.0])
+
+        # Other rescuers: rel_x, rel_y (normalized), visible bit
+        for _ in range(self.num_rescuers - 1):
             obs_low.extend([rel_low, rel_low, 0.0])
             obs_high.extend([rel_high, rel_high, 1.0])
-
-        # Victims: rel_x, rel_y, type (or -1 when masked)
-        for _ in range(self.num_victims):
-            obs_low.extend([rel_low, rel_low, -1.0])
-            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
 
         self.observation_spaces = {
             agent: spaces.Box(
@@ -193,6 +234,26 @@ class SearchAndRescueEnv(ParallelEnv):
         # Metrics state (reset each episode)
         self._episode_counter += 1
         self._reset_metrics()
+
+        self._recharge_events = 0
+        self._energy_depleted_steps = 0
+
+        if self.energy_enabled:
+            # Start full
+            if self.max_energy <= 0:
+                self.max_energy = 1.0
+            self.energy = np.full(self.num_rescuers, self.max_energy, dtype=np.float32)
+
+        # Charger placement
+        if self.num_chargers > 0:
+            if self.randomize_chargers:
+                self.charger_pos = np.random.uniform(-0.9, 0.9, (self.num_chargers, 2))
+            else:
+                # Deterministic-ish placement (spread out)
+                xs = np.linspace(-0.6, 0.6, self.num_chargers)
+                self.charger_pos = np.stack([xs, np.zeros_like(xs)], axis=1)
+        else:
+            self.charger_pos = np.zeros((0, 2), dtype=np.float64)
 
         # Positions: Rescuers, Victims, Trees, SafeZones (using global np.random)
         self.rescuer_pos = np.random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
@@ -312,38 +373,70 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (always visible landmarks)
+            # Energy (normalized) as a local feature
+            if self.energy_enabled:
+                e_norm = float(self.energy[i] / max(self.max_energy, 1e-6))
+                # clamp to [0,1] for bounded Box
+                e_norm = float(np.clip(e_norm, 0.0, 1.0))
+                obs_vec.append(e_norm)
+
+            # 3. N closest landmarks (safe_zones + visible trees):
+            # (rel_x, rel_y, visible_bit, is_safezone_bit, safezone_type)
+            landmark_candidates: list[
+                tuple[float, float, float, float, float, float]
+            ] = []
+            # (dist, rel_x, rel_y, visible_bit, is_safezone_bit, safezone_type)
+
             for sz_i in range(self.num_safe_zones):
-                rel_pos = self.safezone_pos[sz_i] - my_pos
-                obs_vec.extend(
-                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                rel = (self.safezone_pos[sz_i] - my_pos) / self.world_size
+                dist = float(np.linalg.norm(self.safezone_pos[sz_i] - my_pos))
+                zone_type = float(self.safe_zone_types[sz_i])
+                landmark_candidates.append(
+                    (dist, float(rel[0]), float(rel[1]), 1.0, 1.0, zone_type)
                 )
 
-            # 4. Trees (partial observability): mask rel_pos when not visible
-            for t_i in range(self.max_trees):
-                if t_i < self.num_trees and self._is_visible(
+            for t_i in range(self.num_trees):
+                if self._is_visible(
                     my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
-                    rel_pos = self.tree_pos[t_i] - my_pos
-                    obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
-                else:
-                    obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
+                    rel = (self.tree_pos[t_i] - my_pos) / self.world_size
+                    dist = float(np.linalg.norm(self.tree_pos[t_i] - my_pos))
+                    landmark_candidates.append(
+                        (dist, float(rel[0]), float(rel[1]), 1.0, 0.0, 0.0)
+                    )
 
-            # 5. Victims
+            # Sort by distance and take N
+            landmark_candidates.sort(key=lambda x: x[0])
+            top = landmark_candidates[: self.n_closest_landmarks]
+
+            # Pad if fewer than N (visible_bit=0)
+            while len(top) < self.n_closest_landmarks:
+                top.append((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+            for _, rx, ry, vis, is_sz, sz_type in top:
+                obs_vec.extend([rx, ry, vis, is_sz, sz_type])
+
+            # 5. Victims (bounded, no sentinel; include visible bit)
             for v_i in range(self.num_victims):
-                # If visible and not saved
                 if not self.victim_saved[v_i] and self._is_visible(
                     my_pos, self.victim_pos[v_i], self.agent_size
                 ):
-                    rel = self.victim_pos[v_i] - my_pos
-                    # Use numeric type (0-3) for observation
-                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i])])
+                    rel = (self.victim_pos[v_i] - my_pos) / self.world_size
+                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i]), 1.0])
                 else:
-                    obs_vec.extend(
-                        [0.0, 0.0, -1.0]
-                    )  # Masked (Type -1 indicates not visible)
+                    obs_vec.extend([0.0, 0.0, 0.0, 0.0])  # masked slot
 
-            # Other rescuers removed from observation to focus learning on task
+            # 6. Other rescuers (partial observability)
+            for other_idx in range(self.num_rescuers):
+                if other_idx == i:
+                    continue
+                if self._is_visible(
+                    my_pos, self.rescuer_pos[other_idx], self.agent_size
+                ):
+                    rel = (self.rescuer_pos[other_idx] - my_pos) / self.world_size
+                    obs_vec.extend([rel[0], rel[1], 1.0])
+                else:
+                    obs_vec.extend([0.0, 0.0, 0.0])
 
             observations[agent] = np.array(obs_vec, dtype=np.float32)
         return observations
@@ -375,6 +468,28 @@ class SearchAndRescueEnv(ParallelEnv):
                     4: np.array([1.0, 0.0]),  # right
                 }
                 action = action_map.get(action, np.array([0.0, 0.0]))
+
+            # Energy cost for movement
+            if self.energy_enabled:
+                # Cost is based on intended action magnitude + small base idle cost
+                act_norm = float(np.linalg.norm(action))
+                step_cost = self.idle_cost + self.movement_cost_coeff * act_norm
+
+                # If depleted, optionally scale action (default: 0.0 => cannot move)
+                if self.energy[i] <= 0.0:
+                    self._energy_depleted_steps += 1
+                    if self.energy_depleted_action_scale <= 0.0:
+                        action = np.array([0.0, 0.0], dtype=np.float32)
+                    else:
+                        action = (action * self.energy_depleted_action_scale).astype(
+                            np.float32
+                        )
+
+                # Apply cost (even if action became zero, you still pay idle cost)
+                self.energy[i] = float(max(0.0, self.energy[i] - step_cost))
+
+                # Mild shaping: energy use is a small negative reward (trade-off vs speed)
+                rewards[agent] -= float(step_cost)
 
             # Physics
             self.rescuer_vel[i] = self.rescuer_vel[i] * 0.8 + action * 0.1
@@ -533,6 +648,21 @@ class SearchAndRescueEnv(ParallelEnv):
             if (not sees_victim) and np.linalg.norm(self.rescuer_vel[i]) < 0.01:
                 self.rescuer_vel[i] += np.random.uniform(-0.02, 0.02, size=2)
 
+        # Recharging stations
+        if self.energy_enabled and self.num_chargers > 0:
+            for i, agent in enumerate(self.agents):
+                if self.energy[i] >= self.max_energy:
+                    continue
+                # If within recharge_radius of ANY charger, recharge
+                dists = np.linalg.norm(self.charger_pos - self.rescuer_pos[i], axis=1)
+                if np.any(dists <= self.recharge_radius):
+                    before = float(self.energy[i])
+                    self.energy[i] = float(
+                        min(self.max_energy, self.energy[i] + self.recharge_rate)
+                    )
+                    if self.energy[i] > before + 1e-9:
+                        self._recharge_events += 1
+
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
 
@@ -559,14 +689,27 @@ class SearchAndRescueEnv(ParallelEnv):
             )
             coverage_cells = len(set().union(*self._visited_cells))
             collisions = self._collision_events
-            self._completed_episode_metrics.append(
-                {
-                    "episode": self._episode_counter,
-                    "rescues_pct": rescues_pct,
-                    "collisions": collisions,
-                    "coverage_cells": coverage_cells,
-                }
-            )
+            episode_metrics = {
+                "episode": self._episode_counter,
+                "rescues_pct": rescues_pct,
+                "collisions": collisions,
+                "coverage_cells": coverage_cells,
+            }
+
+            if self.energy_enabled:
+                mean_energy_pct = 100.0 * float(
+                    np.mean(self.energy) / max(self.max_energy, 1e-6)
+                )
+                episode_metrics.update(
+                    {
+                        "mean_energy_pct": mean_energy_pct,
+                        "recharge_events": int(self._recharge_events),
+                        "energy_depleted_steps": int(self._energy_depleted_steps),
+                    }
+                )
+
+            self._completed_episode_metrics.append(episode_metrics)
+
             self._reset_metrics()
 
         return self._get_obs(), rewards, terminations, truncations, infos
@@ -601,6 +744,17 @@ class SearchAndRescueEnv(ParallelEnv):
             pygame.draw.circle(s, (*color, 50), (r, r), r)
             self.screen.blit(s, (s_pos[0] - r, s_pos[1] - r))
             pygame.draw.circle(self.screen, color, s_pos, r, 2)
+
+        # Draw Chargers (recharging stations)
+        if self.energy_enabled and self.num_chargers > 0:
+            for pos in self.charger_pos:
+                s_pos = to_screen(pos)
+                r = int(self.charger_radius * 300)
+                # Cyan-ish
+                pygame.draw.circle(self.screen, (50, 220, 220), s_pos, r, 2)
+                s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(s, (50, 220, 220, 40), (r, r), r)
+                self.screen.blit(s, (s_pos[0] - r, s_pos[1] - r))
 
         # Draw Trees
         for pos in self.tree_pos:
