@@ -22,7 +22,7 @@ This README covers two main workflows:
 
 ### Quickstart — Run with Docker (Recommended)
 
-Build the image (only if you need a local image):
+Build the image:
 
 ```bash
 docker build -t student-search:latest -f docker/Dockerfile .
@@ -40,7 +40,13 @@ Run evaluation (Hydra overrides exposed via environment):
 docker run --rm -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" student-search:latest eval.active=true
 ```
 
-If you have `make` available, targets are optional convenience wrappers (see `Makefile`).
+Open tensorboard (port 6006 exposed): _Note: If you want to change the default port, override the forwarded docker port instead of changing the config file_
+
+```bash
+docker run --rm -p 6006:6006 -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" student-search:latest tensorboard.active=true
+```
+
+_If you have `make` available, targets are optional convenience wrappers (`make build`, `make train` and `make eval`)._
 
 ### Quickstart — Run Locally
 
@@ -69,47 +75,81 @@ The environment is built using [PettingZoo](https://pettingzoo.farama.org/) and 
 
 ### Observation Space
 
-Each rescuer agent receives an observation vector containing:
+Each rescuer agent receives a **local observation vector** with the following components:
 
 1. **Self State** (4 values):
    - Velocity: `[vx, vy]`
    - Position: `[x, y]`
+
 2. **Agent ID** (`num_rescuers` values):
    - One-hot encoding for symmetry breaking
-3. **Safe Zones** (`num_safe_zones * 3` values):
-   - Relative position: `[rel_x, rel_y]`
-   - Type index: `[type]` (0-3)
-4. **Trees** (`num_trees * 2` values):
-   - Relative position: `[rel_x, rel_y]` (masked as `[0, 0]` if not visible)
+
+3. **N Closest Landmarks**:
+    TBD
+
+4. **Other Agents** (`(num_rescuers - 1) * 2` values):
+   - Relative positions of other rescuers: `[rel_x, rel_y]` per agent
+   - Masked as `[0, 0]` if not visible (outside vision radius or occluded by trees)
+
 5. **Victims** (`num_victims * 3` values):
    - Relative position: `[rel_x, rel_y]`
-   - Type index: `[type]` (masked as `[0, 0, -1]` if not visible or saved)
+   - Type index: `[type]` (0-3)
+   - Masked as `[0, 0, -1]` if not visible or already saved
 
-**Total observation dimension**: `4 + num_rescuers + (num_safe_zones * 3) + (num_trees * 2) + (num_victims * 3)`
+**Total observation dimension**: `4 + num_rescuers + (n_closest_landmarks * 3) + ((num_rescuers - 1) * 2) + (num_victims * 3)`
+
+**Example** (6 rescuers, 12 victims, N=3 closest landmarks):
+
+- Self: 4
+- Agent ID: 6
+- Landmarks: 3 × 3 = 9
+- Other agents: 5 × 2 = 10
+- Victims: 12 × 3 = 36
+- **Total**: 65 dimensions
 
 ### Action Space
 
-Continuous 2D acceleration vector: `[ax, ay]` in range `[-1, 1]`
+The environment supports both discrete and continuous action spaces (configured via `continuous_actions` parameter):
 
-Actions are applied as:
+**Continuous Actions (default):**
 
-```python
-velocity = velocity * 0.8 + action * 0.1
-velocity = clip(velocity, max_speed=0.08)
-position = position + velocity
-```
+- 2D acceleration vector: `[ax, ay]` in range `[-1, 1]`
+- Actions are applied as:
+
+  ```python
+  velocity = velocity * 0.8 + action * 0.1
+  velocity = clip(velocity, max_speed=0.08)
+  position = position + velocity
+  ```
+
+**Discrete Actions:**
+
+- `Discrete(5)` action space with the following mapping:
+  - `0`: No-op (no movement)
+  - `1`: Up (acceleration `[0.0, 1.0]`)
+  - `2`: Down (acceleration `[0.0, -1.0]`)
+  - `3`: Left (acceleration `[-1.0, 0.0]`)
+  - `4`: Right (acceleration `[1.0, 0.0]`)
+- Discrete actions are internally converted to continuous accelerations and follow the same physics
 
 ### Reward Structure
 
-| Event              | Reward                  | Recipient                     |
-| ------------------ | ----------------------- | ----------------------------- |
-| Successful rescue  | +100.0                  | Assigned rescuer              |
-| Escorting victim   | +1.0 / (distance + 0.1) | Assigned rescuer (per step)   |
-| Distance shaping   | +0.1 \* delta_distance  | All rescuers (getting closer) |
-| Low velocity       | -0.05                   | Stationary rescuer (per step) |
-| Tree collision     | -1.0                    | Colliding rescuer             |
-| Boundary violation | -1.0                    | Violating rescuer             |
-| Agent collision    | -5.0                    | Both colliding rescuers       |
+The reward system uses assignment-aware shaping that dynamically switches between pickup and escort modes:
+
+| Event                                | Reward                                   | Recipient                                                |
+|--------------------------------------| ---------------------------------------- | -------------------------------------------------------- |
+| **Successful rescue**                | +100.0                                   | Assigned rescuer (when victim reaches matching safe zone)|
+| **Pickup mode (unassigned agents):** |                                          |                                                          |
+| Distance to unassigned victim        | -0.1 × distance                          | Non-escorting rescuers (per step)                        |
+| Pickup delta shaping                 | +0.2 × (prev_dist - curr_dist)           | Non-escorting rescuers (approaching unassigned victims)  |
+| **Escort mode (assigned agents):**   |                                          |                                                          |
+| Bounded zone proximity               | +1.0 × exp(-dist_to_zone / 0.5)          | Assigned rescuer (per step, bounded [0,1])               |
+| Escort delta shaping                 | +0.5 × (prev_zone_dist - curr_zone_dist) | Assigned rescuer (bringing victim closer to zone)        |
+| **Penalties:**                       |                                          |                                                          |
+| Tree collision                       | -1.0                                     | Colliding rescuer                                        |
+| Boundary violation                   | -0.2                                     | Rescuer near boundary (\|x\| > 0.95 or \|y\| > 0.95)     |
+| Agent collision                      | -1.0                                     | Each colliding rescuer (dist < 0.15)                     |
+| Idle penalty                         | -0.01                                    | Rescuer with velocity < 1e-3 (per step)                  |
 
 ### Termination Conditions
 
@@ -118,19 +158,18 @@ position = position + velocity
 
 ### Environment Parameters
 
-| Parameter        | Default | Config | Description                              |
-| ---------------- | ------- | ------ | ---------------------------------------- |
-| `num_rescuers`   | 2       | 6      | Number of rescuer agents                 |
-| `num_victims`    | 2       | 12     | Number of victim entities                |
-| `num_trees`      | 5       | 8      | Number of obstacle trees                 |
-| `num_safe_zones` | 4       | 4      | Number of safe zones (always at corners) |
-| `max_cycles`     | 200     | 300    | Maximum steps per episode                |
-| `vision_radius`  | 0.5     | 0.4    | Maximum observation distance             |
-| `rescue_radius`  | 0.15    | 0.15   | Distance threshold for rescuing          |
-| `follow_radius`  | 0.2     | 0.2    | Distance threshold for victim commitment |
-| `world_size`     | 2.0     | 2.0    | World bounds ([-1, 1] range)             |
-
-_Default = code default; Config = value in `conf/config.yaml`_
+| Parameter              | Description                                             |
+| ---------------------- | ------------------------------------------------------- |
+| `num_rescuers`         | Number of rescuer agents                                |
+| `num_victims`          | Number of victim entities                               |
+| `num_trees`            | Number of obstacle trees                                |
+| `num_safe_zones`       | Number of safe zones (always at corners)                |
+| `max_cycles`           | Maximum steps per episode                               |
+| `vision_radius`        | Maximum observation distance                            |
+| `rescue_radius`        | Distance threshold for rescuing                         |
+| `follow_radius`        | Distance threshold for victim commitment                |
+| `randomize_safe_zones` | Whether to randomize safe zone positions                |
+| `world_size`           | World bounds ([-1, 1] range)                            |
 
 ### Environment Features
 
@@ -175,7 +214,7 @@ The project uses **MAPPO (Multi-Agent Proximal Policy Optimization)**:
 - **Shared Parameters**: Homogeneous agents share network weights
 - **GAE**: Generalized Advantage Estimation (γ=0.99, λ=0.95)
 - **Clipping**: PPO clip epsilon = 0.2
-- **Entropy Bonus**: Coefficient = 0.1 (encourages exploration)
+- **Entropy Bonus**: Coefficient = 0.001
 - **Optimizer**: Adam with learning rate = 0.0003
 
 ### Training Examples
@@ -212,7 +251,7 @@ Training metrics are logged to TensorBoard. To view:
 python -m src.main tensorboard.active=true
 ```
 
-Then open http://localhost:6006 in your browser.
+Then open [http://localhost:6006](http://localhost:6006) in your browser.
 
 Key metrics logged:
 
@@ -364,6 +403,7 @@ env:
   safe_zones: 4
   max_cycles: 300
   continuous_actions: true
+  randomize_safe_zones: true
   vision_radius: 0.4
 
 curriculum:
@@ -375,9 +415,9 @@ curriculum:
 train:
   active: false
   total_timesteps: 204800
-  batch_size: 2048
-  n_epochs: 40
-  learning_rate: 0.003
+  batch_size: 256
+  n_epochs: 20
+  learning_rate: 0.0003
 
 eval:
   active: false
