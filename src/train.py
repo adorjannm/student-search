@@ -112,8 +112,7 @@ def train(
         clip_epsilon=0.2,
         entropy_bonus=True,
         entropy_coeff=0.1,
-        normalize_advantage=True,
-        normalize_advantage_exclude_dims=(-1,),
+        normalize_advantage=False,  # Disable - causes shape mismatch in multi-agent
     )
     loss_module.set_keys(
         reward=env.reward_key,
@@ -121,6 +120,7 @@ def train(
         done=("agents", "done"),
         terminated=("agents", "terminated"),  # TorchRL requires terminated
         value=("agents", "state_value"),  # Output of critic
+        sample_log_prob=("agents", "action_log_prob"),  # Key for log probabilities
     )
     loss_module.make_value_estimator(ValueEstimators.GAE, gamma=0.99, lmbda=0.95)
 
