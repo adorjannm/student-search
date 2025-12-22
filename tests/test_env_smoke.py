@@ -72,7 +72,7 @@ class TestReset:
     def test_seed_reproducibility(self, make_env):
         """Same seed produces identical initial state."""
         seed = 123
-        set_seed(seed, deterministic=False)  # CPU-only test, no GPU determinism needed
+        set_seed(seed)
 
         env1 = make_env(num_rescuers=2, num_victims=2, num_trees=3)
         obs1, _ = env1.reset(seed=seed)
@@ -89,7 +89,7 @@ class TestReset:
 
     def test_multiple_resets(self, make_env):
         """Reset can be called multiple times correctly."""
-        set_seed(42, deterministic=False)  # CPU-only test, no GPU determinism needed
+        set_seed(42)
 
         env = make_env(
             num_rescuers=1,
