@@ -190,10 +190,6 @@ class SearchAndRescueEnv(ParallelEnv):
         self.possible_agents = self.agents[:]
         self.victim_names = [f"victim_{i}" for i in range(num_victims)]
 
-        # Assign types cyclically
-        self.victim_types = [i % self.num_safe_zones for i in range(num_victims)]
-        # safe_zone_types will be set in reset() based on randomize_safe_zones
-
         # Colors for rendering
         self.type_colors = {
             0: (255, 50, 50),  # Red (A)
@@ -214,25 +210,59 @@ class SearchAndRescueEnv(ParallelEnv):
             self.action_spaces = {agent: spaces.Discrete(5) for agent in self.agents}
 
         # Observation Space Calculation (Partial Observability with Vision Masking)
-        # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
-        #  SafeZones(4 * 3: rel_x, rel_y, type_idx) - masked if occluded/far,
-        #  Trees(max_trees * 2: rel_x, rel_y) - masked if occluded/far OR beyond num_trees,
-        #  Victims(N * 3: rel_x, rel_y, type_idx) - masked if occluded/far/saved]
-        # Note: All spatial entities use visibility masking based on vision_radius and occlusion
-        # Note: Other rescuers removed from observation to focus learning on task
-        # Note: For curriculum learning, obs space uses max_trees, unused slots are masked
+        # Layout per agent:
+        # [self_vel(2), self_pos(2), agent_id(num_rescuers),
+        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx or -1 if masked),
+        #  trees(max_trees * 3: rel_x, rel_y, visible_bit),
+        #  victims(num_victims * 3: rel_x, rel_y, type_idx or -1 if masked)]
+        self.max_safe_zones = self.num_safe_zones  # kept for clarity
 
         self.obs_dim = (
-            4
-            + num_rescuers  # Agent ID one-hot encoding
-            + (self.num_safe_zones * 3)
-            + (self.max_trees * 2)  # Use max_trees for fixed obs dimension
+            2  # self_vel
+            + 2  # self_pos
+            + self.num_rescuers  # agent_id one-hot
+            + (self.max_safe_zones * 3)
+            + (self.max_trees * 3)
             + (self.num_victims * 3)
         )
 
+        # Build bounded observation space
+        rel_low, rel_high = -3.0, 3.0  # generous bound for relative deltas
+        obs_low = []
+        obs_high = []
+
+        # Self velocity (2)
+        obs_low.extend([-0.1, -0.1])
+        obs_high.extend([0.1, 0.1])
+
+        # Self position (2)
+        obs_low.extend([-1.0, -1.0])
+        obs_high.extend([1.0, 1.0])
+
+        # Agent ID one-hot
+        obs_low.extend([0.0] * self.num_rescuers)
+        obs_high.extend([1.0] * self.num_rescuers)
+
+        # Safe zones: rel_x, rel_y, type (or -1 when masked)
+        for _ in range(self.max_safe_zones):
+            obs_low.extend([rel_low, rel_low, -1.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
+
+        # Trees: rel_x, rel_y (masked to 0), visible bit
+        for _ in range(self.max_trees):
+            obs_low.extend([rel_low, rel_low, 0.0])
+            obs_high.extend([rel_high, rel_high, 1.0])
+
+        # Victims: rel_x, rel_y, type (or -1 when masked)
+        for _ in range(self.num_victims):
+            obs_low.extend([rel_low, rel_low, -1.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
+
         self.observation_spaces = {
             agent: spaces.Box(
-                low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32
+                low=np.array(obs_low, dtype=np.float32),
+                high=np.array(obs_high, dtype=np.float32),
+                dtype=np.float32,
             )
             for agent in self.agents
         }
@@ -333,6 +363,10 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
 
+        self.victim_types = np.random.randint(
+            0, self.num_safe_zones, size=self.num_victims
+        )
+
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
 
@@ -360,34 +394,23 @@ class SearchAndRescueEnv(ParallelEnv):
 
         return self._get_obs(), {a: {} for a in self.agents}
 
-    def _is_visible(self, observer_pos, target_pos, exclude_tree_idx=None) -> bool:
-        """
-        Check if a target is visible from an observer position.
-
-        A target is visible if:
-        1. It is within the vision_radius distance
-        2. The line of sight is not blocked by any tree
-
-        Visibility is determined by checking if the line segment from observer
-        to target intersects any tree circle. This uses geometric intersection
-        calculations.
-
+    def _is_visible(
+        self, observer_pos, target_pos, target_radius, exclude_tree_idx=None
+    ):
+        """Checks whether a target is within vision range and not occluded by trees.
         Args:
-            observer_pos: 2D position of the observer (rescuer agent).
-            target_pos: 2D position of the target entity (victim or tree).
-            exclude_tree_idx: Optional index of a tree to exclude from occlusion
-
-        Returns:
-            True if the target is visible (within range and not occluded),
-            False otherwise.
-
-        Note:
-            If the target position exactly matches a tree position, it is
-            considered visible (to handle edge cases where a tree is the target).
+            observer_pos: Position of the observer.
+            target_pos: Position of the target to check visibility of.
+            target_radius: Radius of the target. Currently unused, kept for API compatibility
+                and potential future use in more detailed visibility calculations.
+            exclude_tree_idx: Optional tree index to exclude from the occlusion check
+                (e.g., when checking if a tree itself is visible). Occlusion is currently
+                determined using the environment's ``tree_radius`` for all trees.
         """
         # If vision radius is zero, nothing is visible
         if self.vision_radius == 0.0:
             return False
+
         dist = np.linalg.norm(target_pos - observer_pos)
         if dist > self.vision_radius:
             return False
@@ -482,34 +505,28 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (with visibility masking)
+            # 3. Safe Zones (always visible landmarks)
             for sz_i in range(self.num_safe_zones):
-                if self._is_visible(my_pos, self.safezone_pos[sz_i]):
-                    rel_pos = self.safezone_pos[sz_i] - my_pos
-                    # We append the numeric type (0-3) so the network knows which zone is which
-                    obs_vec.extend(
-                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
-                    )
-                else:
-                    # Masked: not visible due to distance or occlusion
-                    obs_vec.extend([0.0, 0.0, -1.0])
+                rel_pos = self.safezone_pos[sz_i] - my_pos
+                obs_vec.extend(
+                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                )
 
-            # 4. Trees (pad to max_trees for curriculum learning)
+            # 4. Trees (partial observability): mask rel_pos when not visible
             for t_i in range(self.max_trees):
                 if t_i < self.num_trees and self._is_visible(
-                    my_pos, self.tree_pos[t_i], exclude_tree_idx=t_i
+                    my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
-                    obs_vec.extend(self.tree_pos[t_i] - my_pos)
+                    rel_pos = self.tree_pos[t_i] - my_pos
+                    obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
                 else:
-                    obs_vec.extend(
-                        [0.0, 0.0]
-                    )  # Masked (invisible, occluded, or beyond num_trees)
+                    obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
 
             # 5. Victims
             for v_i in range(self.num_victims):
                 # If visible and not saved
                 if not self.victim_saved[v_i] and self._is_visible(
-                    my_pos, self.victim_pos[v_i]
+                    my_pos, self.victim_pos[v_i], self.agent_size
                 ):
                     rel = self.victim_pos[v_i] - my_pos
                     # Use numeric type (0-3) for observation
@@ -593,6 +610,18 @@ class SearchAndRescueEnv(ParallelEnv):
             speed = np.linalg.norm(self.rescuer_vel[i])
             if speed > 0.08:
                 self.rescuer_vel[i] = (self.rescuer_vel[i] / speed) * 0.08
+
+            # Inward push if we’re hugging the boundary to avoid sticking
+            margin = 0.85
+            inward_k = 0.02
+            if self.rescuer_pos[i][0] > margin:
+                self.rescuer_vel[i][0] -= inward_k
+            elif self.rescuer_pos[i][0] < -margin:
+                self.rescuer_vel[i][0] += inward_k
+            if self.rescuer_pos[i][1] > margin:
+                self.rescuer_vel[i][1] -= inward_k
+            elif self.rescuer_pos[i][1] < -margin:
+                self.rescuer_vel[i][1] += inward_k
 
             self.rescuer_pos[i] += self.rescuer_vel[i]
 
@@ -709,7 +738,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 direction = (assigned_pos - self.victim_pos[v_i]) / (
                     np.linalg.norm(assigned_pos - self.victim_pos[v_i]) + 1e-6
                 )
-                follow_force = 0.04
+                follow_force = 0.03
                 self.victim_vel[v_i] = (
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
@@ -720,6 +749,18 @@ class SearchAndRescueEnv(ParallelEnv):
 
             self.victim_pos[v_i] += self.victim_vel[v_i]
             self.victim_pos[v_i] = np.clip(self.victim_pos[v_i], -1, 1)
+
+        # Gentle exploration if an agent sees no victims (breaks idling)
+        for i, agent in enumerate(self.agents):
+            sees_victim = any(
+                not self.victim_saved[v_i]
+                and self._is_visible(
+                    self.rescuer_pos[i], self.victim_pos[v_i], self.agent_size
+                )
+                for v_i in range(self.num_victims)
+            )
+            if (not sees_victim) and np.linalg.norm(self.rescuer_vel[i]) < 0.01:
+                self.rescuer_vel[i] += np.random.uniform(-0.02, 0.02, size=2)
 
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
@@ -902,55 +943,72 @@ class SearchAndRescueEnv(ParallelEnv):
             dists.append(min_dist)
         return dists
 
-    def _compute_rewards(self, rewards: dict) -> int:
+    def _bounded_zone_shaping(self, dist_to_zone: float) -> float:
         """
-        Compute and assign rewards for all agents.
-
-        This method implements the complete reward structure:
-        - Distance shaping: Reward for getting closer to victims
-        - Rescue rewards: Large reward (+100) for successfully rescuing victims
-        - Assistance rewards: Small reward (+10) for nearby rescuers during rescue
-        - Escort rewards: Continuous reward for escorting victims toward safe zones
-        - Penalties: Tree collisions, boundary violations, agent collisions
-
-        The method also updates victim saved states and tracks assignments.
-
-        Args:
-            rewards: Dictionary mapping agent names to reward values.
-                This dictionary is modified in-place to add computed rewards.
-
-        Returns:
-            Number of saved victims after this step.
-
-        Reward Details:
-            - Distance shaping: +0.1 * (prev_distance - current_distance)
-            - Successful rescue: +100.0 to assigned rescuer
-            - Assistance: +10.0 to rescuers within follow_radius during rescue
-            - Escort: +1.0 / (distance_to_zone + eps) to assigned rescuer
-            - Tree collision: -1.0 (applied during step physics)
-            - Boundary violation: -1.0
-            - Agent collision: -5.0 per agent involved
+        Bounded shaping for escorting a victim to its safe zone.
+        Returns a value in [0, 1], higher when closer.
         """
-        # Delta-based distance shaping (reward for getting closer, penalty for moving away)
-        current_dists = self._compute_agent_victim_dists()
-        for i, agent in enumerate(self.agents):
-            if (
-                hasattr(self, "prev_agent_victim_dists")
-                and self.prev_agent_victim_dists[i] > 0
-            ):
-                delta = (
-                    self.prev_agent_victim_dists[i] - current_dists[i]
-                )  # positive = got closer
-                rewards[agent] += delta * 0.1
-        self.prev_agent_victim_dists = current_dists
+        # Smooth, bounded, stable (no explosion near 0)
+        scale = 0.5  # adjust: smaller => steeper near zone
+        return float(np.exp(-dist_to_zone / scale))
 
-        # Small penalty for low velocity (encourage movement when victims aren't all saved)
-        for i, agent in enumerate(self.agents):
-            speed = np.linalg.norm(self.rescuer_vel[i])
-            if speed < 0.01:  # Nearly stationary
-                rewards[agent] -= 0.05
+    def _nearest_unassigned_victim_dist(self, agent_idx: int) -> float:
+        """
+        Distance from an agent to the nearest *unassigned* and *unsaved* victim.
+        If none exist, returns 0.0
+        """
+        best = float("inf")
+        for v_i in range(self.num_victims):
+            if self.victim_saved[v_i]:
+                continue
+            if self.victim_assignments[v_i] != -1:
+                continue  # already assigned to someone
+            d = np.linalg.norm(self.rescuer_pos[agent_idx] - self.victim_pos[v_i])
+            if d < best:
+                best = d
+        return 0.0 if best == float("inf") else float(best)
 
-        # Check safe zones
+    def _compute_rewards(self, rewards) -> int:
+        """
+        Assignment-aware reward shaping:
+        - If an agent is escorting (has an assigned victim), shape progress to the correct safe zone.
+        - If not escorting, shape movement toward the nearest *unassigned* victim.
+        Also keeps sparse success reward (+100) for saving, plus collision/boundary/idle penalties.
+        """
+
+        # -----------------------------
+        # 1) PICKUP shaping (unassigned agents -> nearest unassigned victim)
+        # -----------------------------
+        # Track previous distances for delta shaping (per agent) for pickup mode
+        if not hasattr(self, "prev_agent_pickup_dists"):
+            self.prev_agent_pickup_dists = [0.0 for _ in range(self.num_rescuers)]
+
+        # Determine which agents are currently escorting at least one victim
+        agent_is_escorting = [False for _ in range(self.num_rescuers)]
+        for v_i in range(self.num_victims):
+            a = int(self.victim_assignments[v_i])
+            if a != -1 and not self.victim_saved[v_i] and 0 <= a < self.num_rescuers:
+                agent_is_escorting[a] = True
+
+        # Pickup shaping for non-escorting agents only
+        for i, agent in enumerate(self.agents):
+            if agent_is_escorting[i]:
+                continue  # escort shaping happens below
+
+            d = self._nearest_unassigned_victim_dist(i)
+
+            # Distance penalty (encourage getting close to a victim to start follow/commit)
+            rewards[agent] -= 0.1 * d
+
+            # Delta shaping (reward improvement)
+            prev = self.prev_agent_pickup_dists[i]
+            if prev > 0.0:
+                rewards[agent] += 0.2 * (prev - d)  # positive if closer
+            self.prev_agent_pickup_dists[i] = d
+
+        # -----------------------------
+        # 2) SAVE events (sparse success reward +100)
+        # -----------------------------
         saved_count = 0
         for v_i in range(self.num_victims):
             if self.victim_saved[v_i]:
@@ -960,64 +1018,88 @@ class SearchAndRescueEnv(ParallelEnv):
             v_pos = self.victim_pos[v_i]
             v_type = self.victim_types[v_i]
 
-            # Find safe zone with matching type (not index!)
             target_zone_idx = self._get_matching_zone_idx(v_type)
             if target_zone_idx is None:
-                # Should not happen if num_safe_zones >= max victim types
                 continue
 
             target_zone_pos = self.safezone_pos[target_zone_idx]
-            dist_to_zone = np.linalg.norm(v_pos - target_zone_pos)
+            dist_to_zone = float(np.linalg.norm(v_pos - target_zone_pos))
 
-            # Victim got saved
+            # Victim saved
             if dist_to_zone < self.safe_zone_radius:
                 self.victim_saved[v_i] = True
                 saved_count += 1
 
-                # Reward ONLY the agent that was assigned to (escorting) this victim
-                assigned_agent_idx = self.victim_assignments[v_i]
-                if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
-                    # Reward only the assigned agent who did the work
+                assigned_agent_idx = int(self.victim_assignments[v_i])
+                if 0 <= assigned_agent_idx < len(self.agents):
                     rewards[self.agents[assigned_agent_idx]] += 100.0
 
-        # Individual credit: reward assigned agent for escorting victim toward safe zone
+        # -----------------------------
+        # 3) ESCORT shaping (assigned agent -> bring victim closer to its zone)
+        # -----------------------------
+        # Track previous zone distances for delta shaping (per victim)
+        if not hasattr(self, "prev_victim_zone_dists"):
+            self.prev_victim_zone_dists = [None for _ in range(self.num_victims)]
+
         for v_i in range(self.num_victims):
-            if not self.victim_saved[v_i]:
-                assigned_agent_idx = self.victim_assignments[v_i]
+            if self.victim_saved[v_i]:
+                continue
 
-                # Only reward the assigned agent (stronger signal for credit assignment)
-                if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
-                    agent = self.agents[assigned_agent_idx]
+            assigned_agent_idx = int(self.victim_assignments[v_i])
+            if assigned_agent_idx == -1 or assigned_agent_idx >= len(self.agents):
+                continue
 
-                    # Find the correct safe zone by matching type
-                    v_type = self.victim_types[v_i]
-                    target_zone_idx = self._get_matching_zone_idx(v_type)
+            agent = self.agents[assigned_agent_idx]
 
-                    if target_zone_idx is not None:
-                        dist_to_zone = np.linalg.norm(
-                            self.victim_pos[v_i] - self.safezone_pos[target_zone_idx]
-                        )
-                        # Reward proportional to inverse distance (closer to goal = higher reward)
-                        # Capped to prevent infinite reward when very close
-                        proximity_reward = min(1.0 / (dist_to_zone + 0.1), 10.0)
-                        rewards[agent] += proximity_reward
+            # Find correct safe zone by type
+            v_type = self.victim_types[v_i]
+            target_zone_idx = self._get_matching_zone_idx(v_type)
+            if target_zone_idx is None:
+                continue
 
-        # Boundary penalties
+            dist_to_zone = float(
+                np.linalg.norm(
+                    self.victim_pos[v_i] - self.safezone_pos[target_zone_idx]
+                )
+            )
+
+            # Bounded dense shaping: in [0,1]
+            # Encourages staying closer to the target zone (stable, no blow-ups)
+            shaped = self._bounded_zone_shaping(dist_to_zone)
+            rewards[agent] += 1.0 * shaped  # weight = 1.0, tune if needed
+
+            # Delta shaping: reward reduction in distance (progress)
+            prev = self.prev_victim_zone_dists[v_i]
+            if prev is not None:
+                rewards[agent] += 0.5 * (prev - dist_to_zone)  # positive if closer
+            self.prev_victim_zone_dists[v_i] = dist_to_zone
+
+        # -----------------------------
+        # 4) Boundary penalties
+        # -----------------------------
         for i, agent in enumerate(self.agents):
             pos = self.rescuer_pos[i]
             if abs(pos[0]) > 0.95 or abs(pos[1]) > 0.95:
-                rewards[agent] -= 1
+                rewards[agent] -= 0.2  # softened from -1
 
-        # Agent collision penalty (physical repulsion is now handled earlier)
+        # -----------------------------
+        # 5) Agent collision penalty (discourage clustering)
+        # -----------------------------
         num_agents = len(self.agents)
         if num_agents > 1:
             for i in range(num_agents):
                 for j in range(i + 1, num_agents):
                     dist = np.linalg.norm(self.rescuer_pos[i] - self.rescuer_pos[j])
-                    if dist < 0.15:  # Agents are overlapping/colliding
-                        # Stronger penalty to discourage clustering (increased from -1.0)
-                        rewards[self.agents[i]] -= 5.0
-                        rewards[self.agents[j]] -= 5.0
+                    if dist < 0.15:
+                        rewards[self.agents[i]] -= 1.0  # softened from -5
+                        rewards[self.agents[j]] -= 1.0
+
+        # -----------------------------
+        # 6) Small penalty for idling
+        # -----------------------------
+        for i, agent in enumerate(self.agents):
+            if np.linalg.norm(self.rescuer_vel[i]) < 1e-3:
+                rewards[agent] -= 0.01
 
         return saved_count
 

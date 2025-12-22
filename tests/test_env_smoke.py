@@ -331,7 +331,19 @@ class TestCollisions:
         assert rewards[agent_names[1]] < 0
 
     def test_boundary_penalty(self, make_env):
-        """Agents near boundaries receive penalty."""
+        """Agents near boundaries receive penalty.
+
+        The boundary penalty is applied when |pos| > 0.95 after physics update.
+        The inward push mechanism (at margin=0.85) reduces velocity toward the wall,
+        so we need to position the agent such that it ends up > 0.95 after the step.
+
+        Physics order:
+        1. vel = vel * 0.8 + action * 0.1
+        2. speed clamp to max 0.08
+        3. inward push if |pos| > 0.85: adjust vel by ±0.02
+        4. pos += vel
+        5. wall collision clamp to [-1, 1]
+        """
         env = make_env(
             num_rescuers=1,
             num_victims=0,
@@ -340,11 +352,21 @@ class TestCollisions:
         env.reset()
 
         agent_name = env.agents[0]
-        place_agent(env, 0, (0.96, 0.0))
+        # Start at 0.94 with velocity 0.08 towards wall.
+        # After step: vel = 0.08*0.8 = 0.064, inward push: vel -= 0.02 = 0.044
+        # pos = 0.94 + 0.044 = 0.984 > 0.95, so penalty applies!
+        place_agent(env, 0, (0.94, 0.0))
+        env.rescuer_vel[0] = np.array([0.08, 0.0])
 
         _, rewards, _, _, _ = env.step({agent_name: noop_action()})
 
-        assert rewards[agent_name] < 0
+        # Verify agent is past threshold and received penalty
+        assert (
+            env.rescuer_pos[0][0] > 0.95
+        ), f"Agent should be past 0.95, got {env.rescuer_pos[0][0]}"
+        assert (
+            rewards[agent_name] < 0
+        ), f"Expected negative reward, got {rewards[agent_name]}"
 
 
 # =============================================================================
