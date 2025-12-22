@@ -117,7 +117,7 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
     - [2:4] Self position (2)
     - [4:4+num_rescuers] Agent ID one-hot (num_rescuers)
     - Safe zones (num_safe_zones * 3: rel_x, rel_y, type)
-    - Trees (num_trees * 2: rel_x, rel_y)
+    - Trees (max_trees * 3: rel_x, rel_y, visible_bit)
     - Victims (num_victims * 3: rel_x, rel_y, type)
 
     Returns:
@@ -126,7 +126,7 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
     base = 4  # vel(2) + pos(2)
     agent_id_end = base + env.num_rescuers
     safe_zones_end = agent_id_end + env.num_safe_zones * 3
-    trees_end = safe_zones_end + env.num_trees * 2
+    trees_end = safe_zones_end + env.max_trees * 3
     victims_end = trees_end + env.num_victims * 3
 
     return {
@@ -142,16 +142,16 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
 def get_tree_obs(
     obs_vec: np.ndarray, slices: dict[str, slice], tree_idx: int
 ) -> np.ndarray:
-    """Extract observation for a specific tree."""
+    """Extract observation for a specific tree (rel_x, rel_y, visible_bit)."""
     tree_slice = slices["trees"]
-    num_trees = (tree_slice.stop - tree_slice.start) // 2
+    num_trees = (tree_slice.stop - tree_slice.start) // 3
     if tree_idx < 0 or tree_idx >= num_trees:
         raise IndexError(
             f"tree_idx {tree_idx} is out of bounds for {num_trees} trees "
             f"(valid indices: 0 to {num_trees - 1})"
         )
-    start = tree_slice.start + tree_idx * 2
-    return obs_vec[start : start + 2]  # noqa: E203
+    start = tree_slice.start + tree_idx * 3
+    return obs_vec[start : start + 3]  # noqa: E203
 
 
 def get_victim_obs(
@@ -198,8 +198,12 @@ def is_masked_victim(victim_obs: np.ndarray, atol: float = 1e-5) -> bool:
 
 
 def is_masked_tree(tree_obs: np.ndarray, atol: float = 1e-5) -> bool:
-    """Check if a tree observation is masked (invisible)."""
-    return np.allclose(tree_obs, [0.0, 0.0], atol=atol)
+    """Check if a tree observation is masked (invisible).
+
+    Tree observations are [rel_x, rel_y, visible_bit].
+    A masked tree has visible_bit = 0.0 (and rel_x, rel_y = 0.0).
+    """
+    return np.allclose(tree_obs, [0.0, 0.0, 0.0], atol=atol)
 
 
 # =============================================================================

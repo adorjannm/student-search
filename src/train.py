@@ -112,8 +112,7 @@ def train(
         clip_epsilon=0.2,
         entropy_bonus=True,
         entropy_coeff=0.1,
-        normalize_advantage=True,
-        normalize_advantage_exclude_dims=(-1,),
+        normalize_advantage=False,  # Disable - causes shape mismatch in multi-agent
     )
     loss_module.set_keys(
         reward=env.reward_key,
@@ -121,6 +120,7 @@ def train(
         done=("agents", "done"),
         terminated=("agents", "terminated"),  # TorchRL requires terminated
         value=("agents", "state_value"),  # Output of critic
+        sample_log_prob=("agents", "action_log_prob"),  # Key for log probabilities
     )
     loss_module.make_value_estimator(ValueEstimators.GAE, gamma=0.99, lmbda=0.95)
 
@@ -168,11 +168,10 @@ def train(
                 target_params=loss_module.target_critic_network_params,
             )
 
-        # Flatten batch time dimensions
+        # Flatten batch time dimensions (on-policy: reset buffer every batch)
         batch = batch.reshape(-1)
+        replay_buffer.empty()
         replay_buffer.extend(batch)
-
-        minibatch_size = 128
 
         # 2. PPO Update
         avg_loss_objective = 0.0
@@ -182,8 +181,8 @@ def train(
         num_updates = 0
 
         for _ in range(num_epochs):
-            for _ in range(frames_per_batch // minibatch_size):
-                subdata = replay_buffer.sample(minibatch_size)
+            for _ in range(frames_per_batch // batch_size):
+                subdata = replay_buffer.sample(batch_size)
                 # Ensure sampled minibatch tensors are on the training device
                 try:
                     subdata = subdata.to(device)

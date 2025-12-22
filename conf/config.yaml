@@ -17,8 +17,9 @@ train:
   active: false
   total_timesteps: 204800
   eval_freq: 500
-  batch_size: 2048
-  n_epochs: 40
+  batch_size: 256
+  frames_per_batch: 2048
+  n_epochs: 20
   render_mode: null
   learning_rate: 0.003
 eval:
