@@ -535,6 +535,44 @@ class TestEdgeCases:
 
 
 # =============================================================================
+# Additional Edge Cases Tests
+# =============================================================================
+
+
+class TestVisionEdgeCases:
+    """Additional edge cases for vision logic."""
+
+    def test_zero_vision_radius_blocks_all(self, make_simple_env):
+        """Zero vision radius makes everything invisible."""
+        env = make_simple_env(vision_radius=0.0, num_trees=0)
+        env.reset()
+
+        place_agent(env, 0, (0.0, 0.0))
+        place_victim(env, 0, (0.01, 0.0))  # Very close
+
+        assert not check_visibility(
+            env, env.rescuer_pos[0], env.victim_pos[0], env.agent_size
+        )
+
+    def test_other_rescuer_visibility(self, make_simple_env):
+        """Other rescuers are visible/masked correctly in observations."""
+        env = make_simple_env(num_rescuers=2, num_trees=1)
+        env.reset()
+
+        place_agent(env, 0, (-0.5, 0.0))
+        place_agent(env, 1, (0.5, 0.0))
+        place_tree(env, 0, (0.0, 0.0))  # Block line of sight
+
+        obs = env._get_obs()
+        slices = get_obs_slices(env)
+
+        # Other rescuer should be masked (blocked)
+        other_slice = slices["other_agents"]
+        other_obs = obs[env.agents[0]][other_slice]
+        assert other_obs[2] == 0.0  # visible bit should be 0
+
+
+# =============================================================================
 # Closest Landmarks Tests
 # =============================================================================
 

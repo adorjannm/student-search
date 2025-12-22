@@ -72,7 +72,7 @@ class TestReset:
     def test_seed_reproducibility(self, make_env):
         """Same seed produces identical initial state."""
         seed = 123
-        set_seed(seed)
+        set_seed(seed, deterministic=False)  # CPU-only test, no GPU determinism needed
 
         env1 = make_env(num_rescuers=2, num_victims=2, num_trees=3)
         obs1, _ = env1.reset(seed=seed)
@@ -89,7 +89,7 @@ class TestReset:
 
     def test_multiple_resets(self, make_env):
         """Reset can be called multiple times correctly."""
-        set_seed(42)
+        set_seed(42, deterministic=False)  # CPU-only test, no GPU determinism needed
 
         env = make_env(
             num_rescuers=1,
@@ -528,3 +528,81 @@ class TestSavingAndTermination:
 
         assert all(truncations.values())
         assert env.steps >= env.max_steps
+
+
+# =============================================================================
+# Additional Functionality Tests
+# =============================================================================
+
+
+class TestDiscreteActions:
+    """Discrete action mode tests (Task 3 requirement)."""
+
+    def test_discrete_action_space_defined(self, make_env):
+        """Discrete action space has 5 actions."""
+        env = make_env(continuous_actions=False)
+        env.reset()
+        assert env.action_spaces[env.agents[0]].n == 5
+
+    def test_discrete_action_mapping(self, make_env):
+        """Discrete actions map correctly to movements."""
+        env = make_env(
+            continuous_actions=False, num_rescuers=1, num_victims=0, num_trees=0
+        )
+        env.reset()
+
+        # Test up action (1)
+        env.rescuer_pos[0] = np.array([0.0, 0.0])
+        env.rescuer_vel[0] = np.array([0.0, 0.0])
+        env.step({env.agents[0]: 1})  # up
+        assert env.rescuer_vel[0][1] > 0  # positive y velocity
+
+
+class TestCurriculumIntegration:
+    """Curriculum learning integration (Task 4 requirement)."""
+
+    def test_set_num_trees_updates_on_reset(self, make_env):
+        """set_num_trees changes tree count after reset."""
+        env = make_env(num_trees=2, max_trees=10)
+        env.reset()
+        assert env.num_trees == 2
+
+        env.set_num_trees(5)
+        env.reset()
+        assert env.num_trees == 5
+
+
+class TestMetricsTracking:
+    """Metrics collection tests (Task 5 requirement)."""
+
+    def test_pop_episode_metrics_returns_data(self, make_env):
+        """Metrics are collected when episode ends."""
+        env = make_env(num_rescuers=1, num_victims=1, max_cycles=3)
+        env.reset()
+
+        for _ in range(5):
+            if not env.agents:
+                break
+            env.step(noop_actions(env))
+
+        metrics = env.pop_episode_metrics()
+        assert len(metrics) >= 1
+        assert "rescues_pct" in metrics[0]
+        assert "collisions" in metrics[0]
+        assert "coverage_cells" in metrics[0]
+
+
+class TestDomainRandomization:
+    """Domain randomization tests (Task 4 requirement)."""
+
+    def test_randomize_safe_zones(self, make_env):
+        """Safe zones randomize when flag is set."""
+        env = make_env(randomize_safe_zones=True)
+
+        positions = []
+        for seed in [1, 2, 3]:
+            env.reset(seed=seed)
+            positions.append(env.safezone_pos.copy())
+
+        # Not all should be identical
+        assert not all(np.allclose(positions[0], p) for p in positions[1:])
