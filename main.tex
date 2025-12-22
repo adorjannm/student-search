@@ -1,0 +1,1057 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================================================
+% PACKAGES
+% ============================================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amstext}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{algorithmicx}
+\usepackage{amsopn}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% ============================================================================
+% DOCUMENT SETTINGS
+% ============================================================================
+\geometry{margin=1in}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=blue
+}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    language=Python,
+    keywordstyle=\color{blue}\bfseries,
+    stringstyle=\color{red},
+    commentstyle=\color{gray}\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    backgroundcolor=\color{gray!5},
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b
+}
+
+% ============================================================================
+% TITLE
+% ============================================================================
+\title{
+    \textbf{Search and Rescue Multi-Agent Simulation}\\[0.5em]
+    \Large Technical Documentation\\[1em]
+    \normalsize ELTE Collective Intelligence Course --- Assignment 2
+}
+\author{
+    Adorján Nagy-Mohos\\
+    \texttt{d5vd5e@inf.elte.hu}
+    \and
+    Máté Kovács\\
+    \texttt{u5bky4@inf.elte.hu}
+    \and
+    Sándor Baranyi\\
+    \texttt{ct9xfj@inf.elte.hu}
+}
+\date{\today}
+
+% ============================================================================
+% DOCUMENT
+% ============================================================================
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides comprehensive technical documentation for the Search and Rescue Multi-Agent Simulation project.
+The simulation utilizes the PettingZoo library for modeling a cooperative multi-agent environment where intelligent rescuer agents must navigate obstacles, locate victims, and guide them to designated safe zones.
+The project implements Multi-Agent Proximal Policy Optimization (MAPPO) using the TorchRL framework for training decentralized policies with centralized value estimation.
+This documentation covers the environment design, agent dynamics, reward mechanisms, training pipeline, and evaluation methodology.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+% ============================================================================
+
+This document provides an in-depth overview of the \textbf{Search and Rescue Multi-Agent Simulation}, which utilizes the PettingZoo library for modeling a cooperative multi-agent environment.
+The simulation is designed to replicate dynamic rescue operations where rescuers navigate an environment containing obstacles, victims, and predefined safe zones to achieve specific objectives.
+
+The primary goal of this project is to develop and evaluate multi-agent reinforcement learning algorithms in a challenging cooperative setting that requires:
+\begin{itemize}
+    \item \textbf{Coordination}: Multiple agents must work together efficiently without explicit communication.
+    \item \textbf{Partial Observability}: Agents have limited vision and must navigate with incomplete information.
+    \item \textbf{Credit Assignment}: Individual agents must learn their contribution to team success.
+    \item \textbf{Dynamic Interactions}: Victims respond to agent behavior through a commitment mechanism.
+\end{itemize}
+
+The following chapters describe the functionalities, components, mathematical formulations, and implementation details of the project.
+
+% ============================================================================
+\section{Functionalities}
+\label{sec:functionalities}
+% ============================================================================
+
+This project presents a comprehensive simulation of a Search and Rescue scenario, designed within a multi-agent environment using the PettingZoo library.
+The environment models a dynamic rescue operation where cooperative agents must navigate a space containing both obstacles and targets to achieve predefined goals.
+The simulation incorporates the following components:
+
+% ----------------------------------------------------------------------------
+\subsection{Environment Setup}
+\label{subsec:env_setup}
+% ----------------------------------------------------------------------------
+
+The environment is configured through a set of parameters that define the simulation characteristics:
+
+\begin{itemize}
+    \item \textbf{Configurable Parameters}: Users can define key elements of the environment, including:
+    \begin{itemize}
+        \item Number of rescuers (agents responsible for guiding victims).
+        \item Number of victims (missing agents to be rescued).
+        \item Number of trees (obstacles obstructing navigation).
+        \item Number of safe zones (designated target areas for rescue).
+    \end{itemize}
+
+    \item \textbf{Agent Interaction}: Rescuers interact with victims using a commitment-based following mechanism.
+    Upon approaching a victim within the follow radius, the victim commits to following that rescuer.
+    This commitment system implements hysteresis to prevent rapid switching between rescuers, providing stable victim-agent relationships.
+
+    \item \textbf{Safe Zone Placement}: Safe zones are fixed at the four corners of the environment.
+    Each zone is assigned a specific type (e.g., A, B, C, D), and only victims of the matching type are considered successfully rescued when they reach the zone.
+    This type-matching requirement introduces an additional layer of strategic planning for the agents.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Rescuers (Agents)}
+\label{subsec:rescuers}
+% ----------------------------------------------------------------------------
+
+Rescuers are intelligent agents that serve as the primary actors in the simulation.
+They exhibit the following characteristics:
+
+\begin{itemize}
+    \item \textbf{Motion Constraints}: Operate under physical constraints such as limited speed, acceleration, and maneuverability.
+    The maximum speed is capped at 0.08 units per timestep, and actions are applied through a velocity-based control scheme.
+
+    \item \textbf{Reactive Behavior}: Demonstrate dynamic behavior by interacting with victims and avoiding obstacles.
+    Agents must adapt their trajectories in real-time based on changing environmental conditions.
+
+    \item \textbf{Commitment Mechanism}: Use a commitment-based system to guide victims.
+    When a rescuer approaches a victim within the follow radius, the victim becomes committed to following that rescuer until either rescued or the rescuer moves too far away.
+
+    \item \textbf{Collision Response}: Agents implement collision detection and response mechanisms for walls, trees, and other agents.
+    Tree collisions result in velocity reflection with damping, while agent-agent proximity triggers soft repulsion forces.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Victims (Missing Agents)}
+\label{subsec:victims}
+% ----------------------------------------------------------------------------
+
+Victims represent passive entities scattered within the environment that require rescue.
+Their characteristics include:
+
+\begin{itemize}
+    \item \textbf{Type Assignment}: Each victim is assigned a specific type (A, B, C, or D) that corresponds to safe zone types.
+    Types are assigned cyclically: victim $i$ receives type $i \mod 4$.
+
+    \item \textbf{Matching Requirement}: Victims must be guided to their matching safe zones to be considered rescued.
+    A victim of type A can only be saved at the type A safe zone.
+
+    \item \textbf{Following Behavior}: When committed to a rescuer, victims follow the assigned agent with a following force of 0.04 units.
+    The victim velocity is updated as shown in Equation~\ref{eq:victim_velocity}.
+    \begin{equation}
+    \label{eq:victim_velocity}
+    \mathbf{v}_{\text{victim}}^{t+1} = 0.8 \cdot \mathbf{v}_{\text{victim}}^{t} + 0.04 \cdot \hat{\mathbf{d}}_{\text{to\_rescuer}}
+    \end{equation}
+
+    \item \textbf{Brownian Motion}: When not committed to any rescuer, victims exhibit simple Brownian motion with noise magnitude 0.0075, simulating random wandering behavior.
+
+    \item \textbf{Commitment Hysteresis}: To prevent rapid switching between rescuers, the commitment system implements hysteresis.
+    A victim releases its current assignment only when the assigned rescuer moves beyond 1.5 times the follow radius, and switches to a new rescuer only if the new rescuer is significantly closer (less than 0.6 times the current distance).
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Safe Zones}
+\label{subsec:safe_zones}
+% ----------------------------------------------------------------------------
+
+Safe zones serve as stationary rescue targets for victims and define the success criteria:
+
+\begin{itemize}
+    \item \textbf{Corner Placement}: Safe zones are predefined at the four corners of the environment at positions:
+    \begin{itemize}
+        \item Type 0 (A): Top-left $(-0.9, 0.9)$
+        \item Type 1 (B): Top-right $(0.9, 0.9)$
+        \item Type 2 (C): Bottom-left $(-0.9, -0.9)$
+        \item Type 3 (D): Bottom-right $(0.9, -0.9)$
+    \end{itemize}
+
+    \item \textbf{Type Identification}: Each safe zone is assigned a unique type, represented by distinct colors (red, green, blue, yellow) for visual identification during rendering.
+
+    \item \textbf{Rescue Condition}: Successful rescues occur only when victims of matching types reach their corresponding safe zones.
+    The rescue is triggered when the Euclidean distance between victim and safe zone falls below the rescue radius of 0.15 units.
+
+    \item \textbf{Optional Randomization}: The environment supports optional randomization of safe zone types while maintaining corner positions, controlled by the \texttt{randomize\_safe\_zones} parameter.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Obstacles (Trees)}
+\label{subsec:obstacles}
+% ----------------------------------------------------------------------------
+
+Trees are static obstacles that add complexity to agent navigation:
+
+\begin{itemize}
+    \item \textbf{Random Distribution}: Trees are randomly distributed within the environment during initialization and maintain fixed positions throughout an episode.
+    The random placement uses uniform sampling within the range $[-0.5, 0.5]$ to avoid spawning too close to corners.
+
+    \item \textbf{Collision Penalty}: Agents are penalized for colliding with trees.
+    Collisions are detected using Euclidean distance between agent and tree centers, with collision occurring when the condition in Equation~\ref{eq:collision} is satisfied.
+    \begin{equation}
+    \label{eq:collision}
+    \|\mathbf{x}_{\text{agent}} - \mathbf{x}_{\text{tree}}\| < r_{\text{agent}} + r_{\text{tree}}
+    \end{equation}
+    where $r_{\text{agent}} = 0.03$ and $r_{\text{tree}} = 0.05$.
+
+    \item \textbf{Path Obstruction}: Obstacles add complexity by blocking direct paths between rescuers and victims or safe zones.
+    This requires agents to develop navigation strategies that avoid obstacles while pursuing objectives.
+
+    \item \textbf{Line-of-Sight Blocking}: Trees obstruct the line-of-sight between agents and other entities.
+    When an entity is occluded by a tree, it is masked in the observation with zeros, introducing partial observability into the environment.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Collision Avoidance}
+\label{subsec:collision_avoidance}
+% ----------------------------------------------------------------------------
+
+The environment implements comprehensive collision avoidance mechanisms:
+
+\begin{itemize}
+    \item \textbf{Agent-Agent Avoidance}: Rescuers apply soft repulsion forces when within close proximity (0.15 units) of each other.
+    The repulsion force magnitude is given by Equation~\ref{eq:repulsion}.
+    \begin{equation}
+    \label{eq:repulsion}
+    F_{\text{repulsion}} = 0.005 \cdot \frac{r_{\text{threshold}} - d}{d}
+    \end{equation}
+    where $d$ is the distance between agents.
+    This prevents clustering while maintaining smooth agent motion.
+
+    \item \textbf{Obstacle Avoidance}: Agents are penalized ($-1.0$ reward) for colliding with trees.
+    Upon collision, the agent's velocity is reflected about the collision normal with damping factor of approximately 0.5, as shown in Equation~\ref{eq:reflection}.
+    \begin{equation}
+    \label{eq:reflection}
+    \mathbf{v}' = \mathbf{v} - 1.5(\mathbf{v} \cdot \hat{\mathbf{n}})\hat{\mathbf{n}}
+    \end{equation}
+
+    \item \textbf{Wall Collision Handling}: When agents cross world boundaries $[-1, 1]$, their position is clamped to the boundary and the corresponding velocity component is inverted with 0.5 damping, as shown in Equation~\ref{eq:wall}.
+    \begin{equation}
+    \label{eq:wall}
+    v_{\text{axis}} \leftarrow -0.5 \cdot v_{\text{axis}}
+    \end{equation}
+
+    \item \textbf{Line-of-Sight Blocking}: Trees obstruct vision between agents.
+    The occlusion check determines whether a tree's bounding region intersects the line segment between observer and target.
+    When visibility is blocked, agents must navigate indirectly.
+
+    \item \textbf{Reactive Behavior}: The environment promotes indirect navigation strategies, such as moving tangentially to obstacles, to simulate realistic path planning behaviors.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Multi-Agent Interaction and Dynamics}
+\label{subsec:multi_agent}
+% ----------------------------------------------------------------------------
+
+The multi-agent aspects of the environment create complex emergent behaviors:
+
+\begin{itemize}
+    \item \textbf{Agent Collaboration}: Although agents operate independently with decentralized policies, their shared objective of rescuing victims promotes emergent collaborative behaviors, such as efficient task distribution and implicit role assignment.
+
+    \item \textbf{Motion Dynamics}: Agents operate under physical constraints including speed limits and acceleration.
+    The velocity update equation is given by Equation~\ref{eq:velocity_update}.
+    \begin{equation}
+    \label{eq:velocity_update}
+    \mathbf{v}^{t+1} = 0.8 \cdot \mathbf{v}^t + 0.1 \cdot \mathbf{a}^t
+    \end{equation}
+    where $\mathbf{a}^t \in [-1, 1]^2$ is the action (acceleration) and velocity is clipped to maximum speed 0.08.
+
+    \item \textbf{Credit Assignment Challenge}: With multiple agents contributing to team success, the environment presents a credit assignment problem.
+    The reward structure is designed to attribute rewards to individual agents based on their specific contributions (e.g., the assigned rescuer receives the rescue bonus).
+
+    \item \textbf{Homogeneous Agents}: All rescuer agents share the same capabilities and policy parameters, promoting the learning of general strategies that work across different agent positions and roles.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Training and Evaluation Framework}
+\label{subsec:training_eval}
+% ----------------------------------------------------------------------------
+
+The project provides comprehensive training and evaluation capabilities:
+
+\begin{itemize}
+    \item \textbf{Training Framework}: The simulation uses TorchRL's implementation of Multi-Agent PPO (MAPPO) for training.
+    Key components include:
+    \begin{itemize}
+        \item SyncDataCollector for parallel experience collection.
+        \item ClipPPOLoss with configurable clipping threshold.
+        \item Generalized Advantage Estimation (GAE) for advantage computation.
+        \item Adam optimizer with configurable learning rate.
+    \end{itemize}
+
+    \item \textbf{Curriculum Learning}: Optional curriculum learning support allows for progressive difficulty adjustment:
+    \begin{itemize}
+        \item Training starts with fewer obstacles (configurable minimum).
+        \item Difficulty gradually increases through defined stages.
+        \item Each stage maintains consistent observation space size.
+    \end{itemize}
+
+    \item \textbf{Configurable Timesteps}: Users can adjust the training duration through the \texttt{total\_timesteps} parameter to control convergence and computational requirements.
+
+    \item \textbf{Performance Logging}: Comprehensive logging is provided through:
+    \begin{itemize}
+        \item \textbf{TensorBoard}: Provides real-time performance visualization including loss curves, reward trajectories, and training statistics.
+        \item \textbf{Checkpoint Saving}: Model weights and configuration are saved for later evaluation and fine-tuning.
+    \end{itemize}
+
+    \item \textbf{Evaluation Pipeline}: The evaluation system supports:
+    \begin{itemize}
+        \item Manual model selection or automatic detection of latest checkpoint.
+        \item Environment configuration loading from saved checkpoints.
+        \item Per-episode metrics collection and aggregation.
+        \item Real-time rendering for visual verification.
+    \end{itemize}
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Reward System}
+\label{subsec:reward_system}
+% ----------------------------------------------------------------------------
+
+The reward system governs agent behavior through a combination of positive rewards and penalties.
+
+\subsubsection{Positive Rewards}
+\label{subsubsec:positive_rewards}
+
+\begin{itemize}
+    \item \textbf{Successful Rescue}: A large reward of $+100.0$ is awarded to the rescuer who was assigned to (escorting) the victim when it reaches its matching safe zone.
+    This is formalized in Equation~\ref{eq:success_reward}.
+    \begin{equation}
+    \label{eq:success_reward}
+    R_{\text{success}} = \begin{cases}
+        100.0 & \text{if victim reaches matching safe zone} \\
+        0 & \text{otherwise}
+    \end{cases}
+    \end{equation}
+
+    \item \textbf{Escort Reward}: The assigned rescuer receives a continuous reward proportional to how close the victim is to its target safe zone, as shown in Equation~\ref{eq:escort_reward}.
+    \begin{equation}
+    \label{eq:escort_reward}
+    R_{\text{escort}} = \min\left(\frac{1.0}{d_{\text{victim-safezone}} + 0.1}, 10.0\right)
+    \end{equation}
+    This reward is capped at 10.0 to prevent infinite rewards when very close.
+
+    \item \textbf{Distance Shaping}: All rescuers receive a shaping reward for reducing distance to unsaved victims, as shown in Equation~\ref{eq:shaping_reward}.
+    \begin{equation}
+    \label{eq:shaping_reward}
+    R_{\text{shaping}} = 0.1 \cdot (d_{\text{prev}} - d_{\text{current}})
+    \end{equation}
+    where positive values indicate the agent moved closer to victims.
+\end{itemize}
+
+\subsubsection{Penalties}
+\label{subsubsec:penalties}
+
+\begin{itemize}
+    \item \textbf{Low Velocity Penalty}: Rescuers with speed below 0.01 receive a penalty of $-0.05$ per step to encourage active exploration.
+    This is formalized in Equation~\ref{eq:velocity_penalty}.
+    \begin{equation}
+    \label{eq:velocity_penalty}
+    R_{\text{velocity}} = \begin{cases}
+        -0.05 & \text{if } \|\mathbf{v}\| < 0.01 \\
+        0 & \text{otherwise}
+    \end{cases}
+    \end{equation}
+
+    \item \textbf{Tree Collision}: A penalty of $-1.0$ is applied when an agent collides with a tree obstacle.
+
+    \item \textbf{Boundary Violation}: A penalty of $-1.0$ is applied when an agent's position exceeds 0.95 in any dimension.
+
+    \item \textbf{Agent Collision}: A stronger penalty of $-5.0$ is applied to both agents when they are within collision distance (0.15 units) to discourage clustering.
+\end{itemize}
+
+\subsubsection{Reward Summary Table}
+\label{subsubsec:reward_table}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Event} & \textbf{Reward} & \textbf{Recipient} \\
+\midrule
+Successful rescue & $+100.0$ & Assigned rescuer \\
+Escorting victim & $+1.0 / (d + 0.1)$ & Assigned rescuer (per step) \\
+Distance shaping & $+0.1 \times \Delta d$ & All rescuers (getting closer) \\
+Low velocity & $-0.05$ & Stationary rescuer (per step) \\
+Tree collision & $-1.0$ & Colliding rescuer \\
+Boundary violation & $-1.0$ & Violating rescuer \\
+Agent collision & $-5.0$ & Both colliding rescuers \\
+\bottomrule
+\end{tabular}
+\caption{Complete reward structure for the Search and Rescue environment.}
+\label{tab:rewards}
+\end{table}
+
+\subsubsection{Combined Reward Function}
+\label{subsubsec:combined_reward}
+
+The total reward for a rescuer agent $i$ at timestep $t$ is given by Equation~\ref{eq:total_reward}.
+\begin{equation}
+\label{eq:total_reward}
+R_i^t = R_{\text{success}} + R_{\text{escort}} + R_{\text{shaping}} + R_{\text{velocity}} - R_{\text{penalties}}
+\end{equation}
+where $R_{\text{penalties}}$ aggregates collision and boundary penalties.
+
+% ----------------------------------------------------------------------------
+\subsection{Observation Space}
+\label{subsec:observation_space}
+% ----------------------------------------------------------------------------
+
+Each rescuer agent receives a structured observation vector that provides local information about the environment.
+The observation components are described below.
+
+\subsubsection{Observation Components}
+\label{subsubsec:obs_components}
+
+\begin{enumerate}
+    \item \textbf{Self State} (4 values):
+    \begin{itemize}
+        \item Velocity: $[v_x, v_y]$
+        \item Position: $[x, y]$
+    \end{itemize}
+
+    \item \textbf{Agent ID} ($N_{\text{rescuers}}$ values):
+    \begin{itemize}
+        \item One-hot encoding of agent index for symmetry breaking.
+        \item Allows shared policy to differentiate between agents.
+    \end{itemize}
+
+    \item \textbf{Safe Zones} ($N_{\text{safe\_zones}} \times 3$ values):
+    \begin{itemize}
+        \item Relative position: $[x_{\text{rel}}, y_{\text{rel}}]$
+        \item Type index: normalized type value.
+    \end{itemize}
+
+    \item \textbf{Trees} ($N_{\text{trees}} \times 2$ values):
+    \begin{itemize}
+        \item Relative position: $[x_{\text{rel}}, y_{\text{rel}}]$
+        \item Masked as $[0, 0]$ if tree is not within vision radius.
+    \end{itemize}
+
+    \item \textbf{Victims} ($N_{\text{victims}} \times 3$ values):
+    \begin{itemize}
+        \item Relative position: $[x_{\text{rel}}, y_{\text{rel}}]$
+        \item Type index (masked as $[0, 0, -1]$ if not visible or already saved).
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Observation Dimension}
+\label{subsubsec:obs_dimension}
+
+The total observation dimension is given by Equation~\ref{eq:obs_dim}.
+\begin{equation}
+\label{eq:obs_dim}
+D_{\text{obs}} = 4 + N_{\text{rescuers}} + 3 \times N_{\text{safe\_zones}} + 2 \times N_{\text{trees}} + 3 \times N_{\text{victims}}
+\end{equation}
+
+\subsubsection{Visibility and Masking}
+\label{subsubsec:visibility}
+
+Observations are partially masked based on visibility constraints:
+\begin{itemize}
+    \item Entities beyond the vision radius are masked with zeros.
+    \item Entities occluded by trees (line-of-sight blocking) are masked.
+    \item Saved victims are masked to indicate they no longer need rescue.
+\end{itemize}
+
+The mathematical observation for agent $i$ is given by Equation~\ref{eq:observation}.
+\begin{equation}
+\label{eq:observation}
+\mathbf{o}_i = [\mathbf{v}_i, \mathbf{x}_i, \mathbf{e}_i^{\text{id}}, \mathbf{x}_{\text{rel\_safezones}}, \mathbf{x}_{\text{rel\_trees}}, \mathbf{x}_{\text{rel\_victims}}]
+\end{equation}
+where $\mathbf{x}_{\text{rel}}$ denotes relative positions computed as shown in Equation~\ref{eq:relative_pos}.
+\begin{equation}
+\label{eq:relative_pos}
+\mathbf{x}_{\text{rel}} = \mathbf{x}_{\text{entity}} - \mathbf{x}_i
+\end{equation}
+
+% ============================================================================
+\section{Structure of the Code}
+\label{sec:code_structure}
+% ============================================================================
+
+The project is organized into modular components, each responsible for a specific aspect of the simulation pipeline.
+This section provides detailed documentation of each module.
+
+% ----------------------------------------------------------------------------
+\subsection{Custom Environment: sar\_env.py}
+\label{subsec:sar_env}
+% ----------------------------------------------------------------------------
+
+The \texttt{sar\_env.py} file defines the multi-agent search-and-rescue environment using the PettingZoo ParallelEnv API.
+It models agents (rescuers and victims), landmarks (trees and safe zones), and their interactions.
+
+\subsubsection{Environment Dynamics}
+\label{subsubsec:env_dynamics}
+
+The environment operates in a 2D continuous space where each agent $i$ has a position $\mathbf{x}_i$ and velocity $\mathbf{v}_i$.
+These are defined in Equation~\ref{eq:agent_state}.
+\begin{equation}
+\label{eq:agent_state}
+\mathbf{x}_i = [x_i, y_i], \quad \mathbf{v}_i = [v_{x_i}, v_{y_i}]
+\end{equation}
+
+Positions are updated according to velocity as shown in Equation~\ref{eq:position_update}.
+\begin{equation}
+\label{eq:position_update}
+\mathbf{x}_i(t+1) = \mathbf{x}_i(t) + \mathbf{v}_i(t)
+\end{equation}
+
+The world boundaries are defined as shown in Equation~\ref{eq:boundaries}.
+\begin{equation}
+\label{eq:boundaries}
+x_{\min} \leq x_i \leq x_{\max}, \quad y_{\min} \leq y_i \leq y_{\max}
+\end{equation}
+where $x_{\min} = y_{\min} = -1$ and $x_{\max} = y_{\max} = 1$.
+
+Agents are penalized and their velocity is reflected if they move out of bounds.
+
+\subsubsection{Collision Detection}
+\label{subsubsec:collision_detection}
+
+Collisions occur when the Euclidean distance between two entities is less than the sum of their radii, as shown in Equation~\ref{eq:collision_general}.
+\begin{equation}
+\label{eq:collision_general}
+\|\mathbf{x}_1 - \mathbf{x}_2\| \leq r_1 + r_2
+\end{equation}
+where $r_1$ and $r_2$ are the radii of the entities.
+
+\begin{lstlisting}[caption={Collision detection implementation.},label={lst:collision}]
+def is_collision(self, pos1, pos2, r1, r2):
+    delta_pos = pos1 - pos2
+    dist = np.sqrt(np.sum(np.square(delta_pos)))
+    dist_min = r1 + r2
+    return dist < dist_min
+\end{lstlisting}
+
+\subsubsection{Reward Mechanism Implementation}
+\label{subsubsec:reward_impl}
+
+The reward computation is implemented in the \texttt{\_compute\_rewards} method.
+
+\begin{lstlisting}[caption={Reward computation pseudocode.},label={lst:rewards}]
+def _compute_rewards(self, rewards):
+    # Distance shaping
+    for agent in agents:
+        delta = prev_dist[agent] - current_dist[agent]
+        rewards[agent] += delta * 0.1
+
+    # Low velocity penalty
+    for agent in agents:
+        if velocity[agent] < 0.01:
+            rewards[agent] -= 0.05
+
+    # Check rescues
+    for victim in victims:
+        if not saved and dist_to_matching_zone < rescue_radius:
+            saved[victim] = True
+            rewards[assigned_rescuer] += 100.0
+
+    # Escort rewards for assigned rescuers
+    for victim in unsaved_victims:
+        if has_assignment:
+            proximity_reward = min(1.0 / (dist_to_zone + 0.1), 10.0)
+            rewards[assigned_agent] += proximity_reward
+
+    # Boundary penalties
+    for agent in agents:
+        if abs(pos) > 0.95:
+            rewards[agent] -= 1.0
+
+    # Agent collision penalties
+    for pair in agent_pairs:
+        if dist < 0.15:
+            rewards[agent_i] -= 5.0
+            rewards[agent_j] -= 5.0
+\end{lstlisting}
+
+\subsubsection{Observation Space Construction}
+\label{subsubsec:obs_construction}
+
+The observation for agent $i$ is constructed by concatenating the relevant components.
+
+\begin{lstlisting}[caption={Observation construction.},label={lst:observation}]
+def observation(self, agent_idx):
+    obs = []
+    # Self state
+    obs.extend(velocity[agent_idx])      # 2 values
+    obs.extend(position[agent_idx])      # 2 values
+
+    # Agent ID one-hot
+    one_hot = np.zeros(num_rescuers)
+    one_hot[agent_idx] = 1.0
+    obs.extend(one_hot)                  # num_rescuers values
+
+    # Safe zones (relative pos + type)
+    for zone in safe_zones:
+        rel_pos = zone.pos - position[agent_idx]
+        obs.extend(rel_pos)              # 2 values
+        obs.append(zone.type / 3.0)      # 1 value (normalized)
+
+    # Trees (relative pos, masked if not visible)
+    for tree in trees:
+        if is_visible(agent_idx, tree):
+            obs.extend(tree.pos - position[agent_idx])
+        else:
+            obs.extend([0, 0])
+
+    # Victims (relative pos + type, masked if not visible)
+    for victim in victims:
+        if is_visible(agent_idx, victim) and not saved[victim]:
+            obs.extend(victim.pos - position[agent_idx])
+            obs.append(victim.type / 3.0)
+        else:
+            obs.extend([0, 0, -1])
+
+    return np.array(obs, dtype=np.float32)
+\end{lstlisting}
+
+% ----------------------------------------------------------------------------
+\subsection{Training Pipeline: train.py}
+\label{subsec:train_pipeline}
+% ----------------------------------------------------------------------------
+
+The \texttt{train.py} file implements the training process using Multi-Agent Proximal Policy Optimization (MAPPO) with TorchRL.
+The pipeline is optimized for efficient reinforcement learning through parallel simulations, observation preprocessing, performance logging, and model-saving mechanisms.
+
+\subsubsection{Reinforcement Learning Setup}
+\label{subsubsec:rl_setup}
+
+The MAPPO algorithm trains rescuer agents to maximize the cumulative reward function.
+The algorithm optimizes the clipped surrogate objective as shown in Equation~\ref{eq:ppo_objective}.
+\begin{equation}
+\label{eq:ppo_objective}
+L^{\text{PPO}}(\theta) = \mathbb{E}_t \left[ \min \left( r_t(\theta) \hat{A}_t, \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]
+\end{equation}
+where:
+\begin{itemize}
+    \item $r_t(\theta) = \frac{\pi_\theta(a_t|s_t)}{\pi_{\theta_{\text{old}}}(a_t|s_t)}$ is the probability ratio between current and old policies.
+    \item $\hat{A}_t$ is the estimated advantage at time step $t$.
+    \item $\epsilon = 0.2$ is the clipping threshold that prevents excessively large policy updates.
+\end{itemize}
+
+\subsubsection{Hyperparameter Configuration}
+\label{subsubsec:hyperparams}
+
+Key hyperparameters are carefully configured to optimize learning efficiency.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Config} \\
+\midrule
+Learning rate $\alpha$ & $3 \times 10^{-4}$ & $3 \times 10^{-3}$ \\
+Batch size & 256 & 2048 \\
+Frames per batch & 2048 & 2048 \\
+Number of epochs & 10 & 40 \\
+Total timesteps & 100,000 & 204,800 \\
+GAE $\gamma$ & 0.99 & 0.99 \\
+GAE $\lambda$ & 0.95 & 0.95 \\
+Clip epsilon $\epsilon$ & 0.2 & 0.2 \\
+Entropy coefficient & 0.1 & 0.1 \\
+Gradient clip norm & 1.0 & 1.0 \\
+\bottomrule
+\end{tabular}
+\caption{Training hyperparameters (Default = code default; Config = conf/config.yaml).}
+\label{tab:hyperparams}
+\end{table}
+
+\subsubsection{Training Process}
+\label{subsubsec:training_process}
+
+The training process follows the steps outlined in Algorithm~\ref{alg:mappo}.
+
+\begin{algorithm}[H]
+\caption{MAPPO Training Loop}
+\label{alg:mappo}
+\begin{algorithmic}[1]
+\State Initialize policy network $\pi_\theta$ and value network $V_\phi$
+\State Initialize data collector and replay buffer
+\For{iteration $= 1$ to total\_iterations}
+    \State Collect frames\_per\_batch steps using current policy
+    \State Compute advantages using GAE: $\hat{A}_t = \sum_{l=0}^{\infty} (\gamma\lambda)^l \delta_{t+l}$
+    \For{epoch $= 1$ to num\_epochs}
+        \For{minibatch in replay buffer}
+            \State Compute policy ratio $r_t(\theta)$
+            \State Compute clipped objective $L^{\text{PPO}}$
+            \State Compute value loss $L^{\text{value}}$
+            \State Compute entropy bonus $L^{\text{entropy}}$
+            \State Update $\theta, \phi$ using Adam optimizer
+        \EndFor
+    \EndFor
+    \State Log metrics to TensorBoard
+    \State Update policy in collector
+\EndFor
+\State Save final checkpoint
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Performance Logging}
+\label{subsubsec:logging}
+
+Training progress is logged to facilitate real-time monitoring and offline analysis:
+
+\begin{itemize}
+    \item \textbf{TensorBoard Logging}: Metrics such as rewards, losses, and learning rates are visualized in real time.
+
+    \item \textbf{Logged Metrics}:
+    \begin{itemize}
+        \item \texttt{train/loss/objective}: PPO clipped objective loss.
+        \item \texttt{train/loss/critic}: Value function loss.
+        \item \texttt{train/loss/entropy}: Entropy bonus (exploration).
+        \item \texttt{train/loss/total}: Combined loss.
+        \item \texttt{train/episode\_reward}: Mean episode reward.
+        \item \texttt{train/total\_frames}: Cumulative frames processed.
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Model Saving}
+\label{subsubsec:model_saving}
+
+Trained models are saved with configuration for reproducibility.
+
+\begin{lstlisting}[caption={Checkpoint saving.},label={lst:checkpoint}]
+checkpoint = {
+    "policy_state_dict": policy.state_dict(),
+    "critic_state_dict": critic.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+    "total_frames": total_frames,
+    "iteration": iteration,
+    "env_config": env_kwargs
+}
+torch.save(checkpoint, f"{save_folder}/checkpoint.pt")
+\end{lstlisting}
+
+% ----------------------------------------------------------------------------
+\subsection{Evaluation Pipeline: eval.py}
+\label{subsec:eval_pipeline}
+% ----------------------------------------------------------------------------
+
+The \texttt{eval.py} script evaluates trained policies by running multiple episodes and computing performance metrics.
+
+\subsubsection{Policy Loading}
+\label{subsubsec:policy_loading}
+
+The evaluation pipeline supports both manual and automatic policy loading.
+
+\textbf{Manual Loading}: User provides the file path for the saved model, as shown in Equation~\ref{eq:manual_load}.
+\begin{equation}
+\label{eq:manual_load}
+\pi_{\theta_{\text{loaded}}} = \text{load}(\text{path\_to\_model})
+\end{equation}
+
+\textbf{Automatic Loading}: The script identifies the latest saved model using file modification timestamps, as shown in Equation~\ref{eq:auto_load}.
+\begin{equation}
+\label{eq:auto_load}
+\pi_{\theta_{\text{loaded}}} = \arg\max_\theta(t_{\text{saved}})
+\end{equation}
+
+\subsubsection{Evaluation Process}
+\label{subsubsec:eval_process}
+
+The evaluation runs the environment for $N_{\text{episodes}}$ episodes, where agents act based on the loaded policy $\pi_{\theta}$.
+The environment produces a trajectory as shown in Equation~\ref{eq:trajectory}.
+\begin{equation}
+\label{eq:trajectory}
+\tau = \{(s_t, a_t, r_t, s_{t+1}) \mid t = 0, 1, \ldots, T\}
+\end{equation}
+
+The cumulative reward for an episode is given by Equation~\ref{eq:episode_reward}.
+\begin{equation}
+\label{eq:episode_reward}
+R_{\text{episode}} = \sum_{t=0}^{T} r_t
+\end{equation}
+
+\subsubsection{Performance Metrics}
+\label{subsubsec:perf_metrics}
+
+The following metrics are computed over evaluation episodes.
+
+\textbf{Average Reward} is given by Equation~\ref{eq:avg_reward}.
+\begin{equation}
+\label{eq:avg_reward}
+\bar{R} = \frac{1}{N_{\text{episodes}}} \sum_{i=1}^{N_{\text{episodes}}} R_{\text{episode},i}
+\end{equation}
+
+\textbf{Per-Agent Rewards}: Individual agent rewards $R_{\text{agent},i}$ are computed for each rescuer.
+
+\textbf{Success Rate} is given by Equation~\ref{eq:success_rate}.
+\begin{equation}
+\label{eq:success_rate}
+\text{Success Rate} = \frac{N_{\text{successful\_rescues}}}{N_{\text{victims}}}
+\end{equation}
+
+\subsubsection{Rendering}
+\label{subsubsec:rendering}
+
+To visually verify agent behavior, the evaluation pipeline supports rendering the environment in real time.
+
+The rendering displays:
+\begin{itemize}
+    \item Safe zones with type-specific colors and transparency.
+    \item Trees as gray circular obstacles.
+    \item Victims with type-matching colors.
+    \item Rescuers as white circles with vision radius indicators.
+    \item Type labels (A, B, C, D) on zones and victims.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
+\subsection{Workflow Orchestration: main.py}
+\label{subsec:main}
+% ----------------------------------------------------------------------------
+
+The \texttt{main.py} script serves as the central control hub for the project, orchestrating training and evaluation workflows using Hydra for configuration management.
+
+\subsubsection{Core Functionality}
+\label{subsubsec:core_func}
+
+The script provides three primary execution modes:
+
+\begin{enumerate}
+    \item \textbf{Training Mode}: Invokes the \texttt{train()} function to train agents using MAPPO.
+    \item \textbf{Evaluation Mode}: Invokes the \texttt{evaluate()} function to assess trained policies.
+    \item \textbf{TensorBoard Mode}: Launches TensorBoard server for visualization.
+\end{enumerate}
+
+\subsubsection{Configuration Management}
+\label{subsubsec:config_mgmt}
+
+Hydra enables flexible configuration through YAML files and command-line overrides.
+
+\begin{lstlisting}[language=bash,caption={Example usage.},label={lst:usage}]
+# Training with default config
+python -m src.main train.active=true
+
+# Training with custom parameters
+python -m src.main train.active=true \
+    env.victims=12 env.rescuers=6 \
+    train.total_timesteps=500000
+
+# Evaluation with rendering
+python -m src.main eval.active=true eval.render_mode=human
+\end{lstlisting}
+
+\subsubsection{Modular Design}
+\label{subsubsec:modular}
+
+The script is designed to be modular, enabling users to:
+\begin{itemize}
+    \item Easily switch between training and evaluation modes.
+    \item Configure environment parameters through configuration files.
+    \item Extend functionality for fine-tuning, testing, or benchmarking policies.
+\end{itemize}
+
+% ============================================================================
+\section{Environment Parameters}
+\label{sec:parameters}
+% ============================================================================
+
+This section provides a comprehensive reference of all configurable environment parameters.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Config} & \textbf{Description} \\
+\midrule
+\texttt{num\_rescuers} & 2 & 6 & Number of rescuer agents \\
+\texttt{num\_victims} & 2 & 12 & Number of victim entities \\
+\texttt{num\_trees} & 5 & 8 & Number of obstacle trees \\
+\texttt{num\_safe\_zones} & 4 & 4 & Number of safe zones (corners) \\
+\texttt{max\_cycles} & 200 & 300 & Maximum steps per episode \\
+\texttt{vision\_radius} & 0.5 & 0.4 & Maximum observation distance \\
+\texttt{rescue\_radius} & 0.15 & 0.15 & Distance for successful rescue \\
+\texttt{follow\_radius} & 0.2 & 0.2 & Distance for victim commitment \\
+\texttt{agent\_size} & 0.03 & 0.03 & Radius of agent entities \\
+\texttt{tree\_radius} & 0.05 & 0.05 & Radius of tree obstacles \\
+\texttt{safe\_zone\_radius} & 0.15 & 0.15 & Radius of safe zones \\
+\texttt{world\_size} & 2.0 & 2.0 & World bounds ([-1, 1] range) \\
+\texttt{continuous\_actions} & True & True & Use continuous action space \\
+\texttt{randomize\_safe\_zones} & False & True & Randomize safe zone types \\
+\bottomrule
+\end{tabular}
+\caption{Environment parameters (Default = code default; Config = conf/config.yaml).}
+\label{tab:env_params}
+\end{table}
+
+% ============================================================================
+\section{Model Architecture}
+\label{sec:model_architecture}
+% ============================================================================
+
+The neural network architecture follows the MAPPO paradigm with decentralized actors and centralized critics.
+
+% ----------------------------------------------------------------------------
+\subsection{Policy Network (Actor)}
+\label{subsec:policy_network}
+% ----------------------------------------------------------------------------
+
+The policy network maps local observations to action distributions:
+
+\begin{itemize}
+    \item \textbf{Input}: Local observation $[\text{batch}, N_{\text{agents}}, D_{\text{obs}}]$.
+    \item \textbf{Architecture}: 2-layer MLP with 64 hidden units per layer.
+    \item \textbf{Activation}: Tanh activation function.
+    \item \textbf{Output}: Parameters for TanhNormal distribution (location and scale).
+    \item \textbf{Parameter Sharing}: Shared across all agents (homogeneous policy).
+\end{itemize}
+
+The policy architecture can be expressed as shown in Equations~\ref{eq:policy_h1}--\ref{eq:policy_sigma}.
+\begin{align}
+    \mathbf{h}_1 &= \tanh(W_1 \mathbf{o} + b_1) \label{eq:policy_h1} \\
+    \mathbf{h}_2 &= \tanh(W_2 \mathbf{h}_1 + b_2) \label{eq:policy_h2} \\
+    \boldsymbol{\mu} &= W_\mu \mathbf{h}_2 + b_\mu \label{eq:policy_mu} \\
+    \boldsymbol{\sigma} &= \text{softplus}(W_\sigma \mathbf{h}_2 + b_\sigma) \label{eq:policy_sigma}
+\end{align}
+
+Actions are sampled from: $\mathbf{a} \sim \text{TanhNormal}(\boldsymbol{\mu}, \boldsymbol{\sigma})$.
+
+% ----------------------------------------------------------------------------
+\subsection{Value Network (Critic)}
+\label{subsec:value_network}
+% ----------------------------------------------------------------------------
+
+The value network estimates state values for advantage computation:
+
+\begin{itemize}
+    \item \textbf{Input}: All agent observations $[\text{batch}, N_{\text{agents}}, D_{\text{obs}}]$.
+    \item \textbf{Architecture}: 2-layer MLP with 128 hidden units per layer.
+    \item \textbf{Activation}: Tanh activation function.
+    \item \textbf{Output}: State value $[\text{batch}, N_{\text{agents}}, 1]$.
+    \item \textbf{Centralized}: True (observes all agent observations for credit assignment).
+\end{itemize}
+
+% ============================================================================
+\section{Curriculum Learning}
+\label{sec:curriculum}
+% ============================================================================
+
+The project supports curriculum learning for progressive difficulty adjustment during training.
+
+\subsection{Curriculum Configuration}
+\label{subsec:curriculum_config}
+
+\begin{itemize}
+    \item \textbf{Minimum Trees}: Starting number of obstacles (default: 0).
+    \item \textbf{Maximum Trees}: Final number of obstacles (default: 8).
+    \item \textbf{Number of Stages}: Progression stages (default: 5).
+    \item \textbf{Stage Duration}: Automatically calculated as $\frac{\text{total\_iterations}}{\text{num\_stages}}$.
+\end{itemize}
+
+\subsection{Progression Strategy}
+\label{subsec:progression}
+
+The number of trees at stage $s$ is computed as shown in Equation~\ref{eq:curriculum}.
+\begin{equation}
+\label{eq:curriculum}
+N_{\text{trees}}(s) = N_{\min} + \left\lfloor \frac{s}{S-1} \times (N_{\max} - N_{\min}) \right\rfloor
+\end{equation}
+where $S$ is the total number of stages.
+
+The curriculum maintains a fixed observation space size by using \texttt{max\_trees} for observation dimensionality, with unused tree slots masked as zeros.
+
+% ============================================================================
+\section{Usage Guide}
+\label{sec:usage}
+% ============================================================================
+
+\subsection{Docker Execution}
+\label{subsec:docker}
+
+\begin{lstlisting}[language=bash,caption={Docker execution commands.},label={lst:docker}]
+# Build image
+docker build -t student-search:latest -f docker/Dockerfile .
+
+# Training
+docker run --rm \
+    -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" \
+    student-search:latest
+
+# Evaluation
+docker run --rm \
+    -v "${PWD}/search_rescue_logs:/app/search_rescue_logs" \
+    student-search:latest eval.active=true
+\end{lstlisting}
+
+\subsection{Local Execution}
+\label{subsec:local}
+
+\begin{lstlisting}[language=bash,caption={Local execution commands.},label={lst:local}]
+# Install dependencies
+pip install -e .
+pip install -e ".[dev]"
+
+# Training
+python -m src.main train.active=true
+
+# Evaluation with rendering
+python -m src.main eval.active=true eval.render_mode=human
+
+# Custom configuration
+python -m src.main train.active=true \
+    env.victims=12 env.rescuers=6 \
+    train.total_timesteps=500000 \
+    train.learning_rate=0.001
+\end{lstlisting}
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% ============================================================================
+
+This documentation has provided a comprehensive overview of the Search and Rescue Multi-Agent Simulation project.
+The key contributions include:
+
+\begin{enumerate}
+    \item A flexible multi-agent environment implementing realistic search and rescue dynamics.
+    \item A commitment-based victim following system with hysteresis for stable agent-victim relationships.
+    \item A carefully designed reward structure that enables effective credit assignment.
+    \item Integration with TorchRL for efficient MAPPO training.
+    \item Optional curriculum learning for progressive difficulty adjustment.
+    \item Comprehensive logging and visualization capabilities.
+\end{enumerate}
+
+The modular design allows for easy extension and experimentation with different algorithms, environment configurations, and training strategies.
+
+\end{document}
