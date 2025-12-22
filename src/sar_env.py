@@ -54,10 +54,6 @@ class SearchAndRescueEnv(ParallelEnv):
         self.possible_agents = self.agents[:]
         self.victim_names = [f"victim_{i}" for i in range(num_victims)]
 
-        # Assign types cyclically
-        self.victim_types = [i % self.num_safe_zones for i in range(num_victims)]
-        # safe_zone_types will be set in reset() based on randomize_safe_zones
-
         # Colors for rendering
         self.type_colors = {
             0: (255, 50, 50),  # Red (A)
@@ -205,6 +201,10 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_pos = np.random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
+
+        self.victim_types = np.random.randint(
+            0, self.num_safe_zones, size=self.num_victims
+        )
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
