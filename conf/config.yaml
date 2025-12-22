@@ -21,7 +21,7 @@ train:
   frames_per_batch: 2048
   n_epochs: 20
   render_mode: null
-  learning_rate: 0.003
+  learning_rate: 0.0003
 eval:
   active: false
   games: 10

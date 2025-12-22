@@ -55,7 +55,10 @@ class TestBasicOcclusion:
         tree_obs = get_tree_obs(obs_vec, slices, 0)
         expected_tree_rel = env.tree_pos[0] - env.rescuer_pos[0]
         assert_obs_matches(
-            tree_obs[:2], expected_tree_rel, msg="Tree should be visible"
+            tree_obs[:2],
+            expected_tree_rel,
+            scale=env.world_size,
+            msg="Tree should be visible",
         )
         assert tree_obs[2] == 1.0, "Tree visible bit should be 1.0"
 
@@ -74,9 +77,13 @@ class TestBasicOcclusion:
         victim_obs = get_victim_obs(obs_vec, slices, 0)
         expected_rel = env.victim_pos[0] - env.rescuer_pos[0]
         assert_obs_matches(
-            victim_obs[:2], expected_rel[:2], msg="Victim should be visible now"
+            victim_obs[:2],
+            expected_rel[:2],
+            scale=env.world_size,
+            msg="Victim should be visible now",
         )
         assert victim_obs[2] == env.victim_types[0], "Victim type should match"
+        assert victim_obs[3] == 1.0, "Victim visible bit should be 1.0"
 
     def test_tree_behind_observer_no_block(self, env_simple):
         """Trees behind observer don't block vision."""
@@ -311,7 +318,12 @@ class TestMultipleTrees:
         # First tree visible
         tree0_obs = get_tree_obs(obs_vec, slices, 0)
         expected = env.tree_pos[0] - env.rescuer_pos[0]
-        assert_obs_matches(tree0_obs[:2], expected, msg="First tree should be visible")
+        assert_obs_matches(
+            tree0_obs[:2],
+            expected,
+            scale=env.world_size,
+            msg="First tree should be visible",
+        )
         assert tree0_obs[2] == 1.0, "First tree visible bit should be 1.0"
 
         # Second tree blocked
@@ -404,6 +416,7 @@ class TestSafeZones:
                 assert_obs_matches(
                     zone_obs[:2],
                     expected_rel,
+                    scale=env.world_size,
                     msg=f"Safe zone {i} should have correct relative position",
                 )
                 assert zone_obs[2] == float(env.safe_zone_types[i])
@@ -433,7 +446,8 @@ class TestObservationStructure:
             + env.num_rescuers  # agent ID one-hot
             + (env.num_safe_zones * 3)  # safe zones
             + (env.max_trees * 3)  # trees (rel_x, rel_y, visible_bit)
-            + (env.num_victims * 3)  # victims
+            + (env.num_victims * 4)  # victims (rel_x, rel_y, type, visible_bit)
+            + ((env.num_rescuers - 1) * 3)  # other rescuers
         )
 
         for agent in env.agents:
@@ -479,13 +493,13 @@ class TestObservationStructure:
         if check_visibility(env, env.rescuer_pos[0], env.victim_pos[0], env.agent_size):
             victim0_obs = get_victim_obs(obs_vec, slices, 0)
             expected = env.victim_pos[0] - env.rescuer_pos[0]
-            assert_obs_matches(victim0_obs[:2], expected)
+            assert_obs_matches(victim0_obs[:2], expected, scale=env.world_size)
 
         # Check tree relative positions if visible
         if check_visibility(env, env.rescuer_pos[0], env.tree_pos[0], env.tree_radius):
             tree0_obs = get_tree_obs(obs_vec, slices, 0)
             expected = env.tree_pos[0] - env.rescuer_pos[0]
-            assert_obs_matches(tree0_obs[:2], expected)
+            assert_obs_matches(tree0_obs[:2], expected, scale=env.world_size)
 
 
 # =============================================================================
@@ -623,7 +637,12 @@ class TestEdgeCases:
         # Tree 0 should be visible (excludes itself)
         tree0_obs = get_tree_obs(obs_vec, slices, 0)
         expected = env.tree_pos[0] - env.rescuer_pos[0]
-        assert_obs_matches(tree0_obs[:2], expected, msg="Tree 0 should be visible")
+        assert_obs_matches(
+            tree0_obs[:2],
+            expected,
+            scale=env.world_size,
+            msg="Tree 0 should be visible",
+        )
         assert tree0_obs[2] == 1.0, "Tree 0 visible bit should be 1.0"
 
         # Verify with _is_visible

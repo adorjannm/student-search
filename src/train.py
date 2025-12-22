@@ -111,7 +111,7 @@ def train(
         critic_network=critic,
         clip_epsilon=0.2,
         entropy_bonus=True,
-        entropy_coeff=0.1,
+        entropy_coeff=0.001,
         normalize_advantage=False,  # Disable - causes shape mismatch in multi-agent
     )
     loss_module.set_keys(

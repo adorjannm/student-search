@@ -118,7 +118,8 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
     - [4:4+num_rescuers] Agent ID one-hot (num_rescuers)
     - Safe zones (num_safe_zones * 3: rel_x, rel_y, type)
     - Trees (max_trees * 3: rel_x, rel_y, visible_bit)
-    - Victims (num_victims * 3: rel_x, rel_y, type)
+    - Victims (num_victims * 4: rel_x, rel_y, type, visible_bit)
+    - Other rescuers ((num_rescuers - 1) * 3: rel_x, rel_y, visible_bit)
 
     Returns:
         Dictionary mapping component names to their slice indices.
@@ -127,7 +128,8 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
     agent_id_end = base + env.num_rescuers
     safe_zones_end = agent_id_end + env.num_safe_zones * 3
     trees_end = safe_zones_end + env.max_trees * 3
-    victims_end = trees_end + env.num_victims * 3
+    victims_end = trees_end + env.num_victims * 4
+    others_end = victims_end + (env.num_rescuers - 1) * 3
 
     return {
         "self_vel": slice(0, 2),
@@ -136,6 +138,7 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
         "safe_zones": slice(agent_id_end, safe_zones_end),
         "trees": slice(safe_zones_end, trees_end),
         "victims": slice(trees_end, victims_end),
+        "other_agents": slice(victims_end, others_end),
     }
 
 
@@ -160,13 +163,13 @@ def get_victim_obs(
     """Extract observation for a specific victim."""
     victim_slice = slices["victims"]
     victim_span = victim_slice.stop - victim_slice.start
-    num_victims = victim_span // 3 if victim_span >= 0 else 0
+    num_victims = victim_span // 4 if victim_span >= 0 else 0
     if not (0 <= victim_idx < num_victims):
         raise IndexError(
             f"victim_idx {victim_idx} is out of range for {num_victims} victims"
         )
-    start = victim_slice.start + victim_idx * 3
-    return obs_vec[start : start + 3]  # noqa: E203
+    start = victim_slice.start + victim_idx * 4
+    return obs_vec[start : start + 4]  # noqa: E203
 
 
 def get_safe_zone_obs(
@@ -188,13 +191,13 @@ def get_safe_zone_obs(
             f"(valid indices are 0 to {num_safe_zones - 1})."
         )
 
-    start = safe_slice.start + zone_idx * 3
-    return obs_vec[start : start + 3]  # noqa: E203
+    start = safe_slice.start + zone_idx * 4
+    return obs_vec[start : start + 4]  # noqa: E203
 
 
 def is_masked_victim(victim_obs: np.ndarray, atol: float = 1e-5) -> bool:
     """Check if a victim observation is masked (invisible/saved)."""
-    return np.allclose(victim_obs, [0.0, 0.0, -1.0], atol=atol)
+    return np.allclose(victim_obs, [0.0, 0.0, 0.0, 0.0], atol=atol)
 
 
 def is_masked_tree(tree_obs: np.ndarray, atol: float = 1e-5) -> bool:
@@ -305,10 +308,13 @@ def assert_not_visible(
 def assert_obs_matches(
     actual: np.ndarray,
     expected: np.ndarray,
+    scale: float = 1.0,
     atol: float = 1e-5,
     msg: str = "",
 ):
-    """Assert that observation arrays match within tolerance."""
+    """Assert that observation arrays match within tolerance, with optional scaling."""
+    if scale != 1.0:
+        expected = expected / scale
     assert np.allclose(actual, expected, atol=atol), (
         msg or f"Observation mismatch. Got {actual}, expected {expected}"
     )

@@ -76,9 +76,10 @@ class SearchAndRescueEnv(ParallelEnv):
         # Observation Space Calculation (Partial Observability with Vision Masking)
         # Layout per agent:
         # [self_vel(2), self_pos(2), agent_id(num_rescuers),
-        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx or -1 if masked),
+        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx),
         #  trees(max_trees * 3: rel_x, rel_y, visible_bit),
-        #  victims(num_victims * 3: rel_x, rel_y, type_idx or -1 if masked)]
+        #  victims(num_victims * 4: rel_x, rel_y, type_idx, visible_bit),
+        #  other_rescuers((num_rescuers - 1) * 3: rel_x, rel_y, visible_bit)]
         self.max_safe_zones = self.num_safe_zones  # kept for clarity
 
         self.obs_dim = (
@@ -87,11 +88,12 @@ class SearchAndRescueEnv(ParallelEnv):
             + self.num_rescuers  # agent_id one-hot
             + (self.max_safe_zones * 3)
             + (self.max_trees * 3)
-            + (self.num_victims * 3)
+            + (self.num_victims * 4)
+            + ((self.num_rescuers - 1) * 3)
         )
 
         # Build bounded observation space
-        rel_low, rel_high = -3.0, 3.0  # generous bound for relative deltas
+        rel_low, rel_high = -1.0, 1.0  # normalized relative deltas
         obs_low = []
         obs_high = []
 
@@ -107,20 +109,25 @@ class SearchAndRescueEnv(ParallelEnv):
         obs_low.extend([0.0] * self.num_rescuers)
         obs_high.extend([1.0] * self.num_rescuers)
 
-        # Safe zones: rel_x, rel_y, type (or -1 when masked)
+        # Safe zones: rel_x, rel_y (normalized), type
         for _ in range(self.max_safe_zones):
-            obs_low.extend([rel_low, rel_low, -1.0])
+            obs_low.extend([rel_low, rel_low, 0.0])
             obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
 
-        # Trees: rel_x, rel_y (masked to 0), visible bit
+        # Trees: rel_x, rel_y (normalized), visible bit
         for _ in range(self.max_trees):
             obs_low.extend([rel_low, rel_low, 0.0])
             obs_high.extend([rel_high, rel_high, 1.0])
 
-        # Victims: rel_x, rel_y, type (or -1 when masked)
+        # Victims: rel_x, rel_y (normalized), type, visible bit
         for _ in range(self.num_victims):
-            obs_low.extend([rel_low, rel_low, -1.0])
-            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
+            obs_low.extend([rel_low, rel_low, 0.0, 0.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1), 1.0])
+
+        # Other rescuers: rel_x, rel_y (normalized), visible bit
+        for _ in range(self.num_rescuers - 1):
+            obs_low.extend([rel_low, rel_low, 0.0])
+            obs_high.extend([rel_high, rel_high, 1.0])
 
         self.observation_spaces = {
             agent: spaces.Box(
@@ -314,7 +321,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
             # 3. Safe Zones (always visible landmarks)
             for sz_i in range(self.num_safe_zones):
-                rel_pos = self.safezone_pos[sz_i] - my_pos
+                rel_pos = (self.safezone_pos[sz_i] - my_pos) / self.world_size
                 obs_vec.extend(
                     [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
                 )
@@ -324,26 +331,32 @@ class SearchAndRescueEnv(ParallelEnv):
                 if t_i < self.num_trees and self._is_visible(
                     my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
-                    rel_pos = self.tree_pos[t_i] - my_pos
+                    rel_pos = (self.tree_pos[t_i] - my_pos) / self.world_size
                     obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
                 else:
                     obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
 
-            # 5. Victims
+            # 5. Victims (bounded, no sentinel; include visible bit)
             for v_i in range(self.num_victims):
-                # If visible and not saved
                 if not self.victim_saved[v_i] and self._is_visible(
                     my_pos, self.victim_pos[v_i], self.agent_size
                 ):
-                    rel = self.victim_pos[v_i] - my_pos
-                    # Use numeric type (0-3) for observation
-                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i])])
+                    rel = (self.victim_pos[v_i] - my_pos) / self.world_size
+                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i]), 1.0])
                 else:
-                    obs_vec.extend(
-                        [0.0, 0.0, -1.0]
-                    )  # Masked (Type -1 indicates not visible)
+                    obs_vec.extend([0.0, 0.0, 0.0, 0.0])  # masked slot
 
-            # Other rescuers removed from observation to focus learning on task
+            # 6. Other rescuers (partial observability)
+            for other_idx in range(self.num_rescuers):
+                if other_idx == i:
+                    continue
+                if self._is_visible(
+                    my_pos, self.rescuer_pos[other_idx], self.agent_size
+                ):
+                    rel = (self.rescuer_pos[other_idx] - my_pos) / self.world_size
+                    obs_vec.extend([rel[0], rel[1], 1.0])
+                else:
+                    obs_vec.extend([0.0, 0.0, 0.0])
 
             observations[agent] = np.array(obs_vec, dtype=np.float32)
         return observations
