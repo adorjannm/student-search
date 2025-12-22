@@ -76,7 +76,7 @@ class TestBasicOcclusion:
         assert_obs_matches(
             victim_obs[:2], expected_rel[:2], msg="Victim should be visible now"
         )
-        assert victim_obs[2] == 0.0
+        assert victim_obs[2] == env.victim_types[0], "Victim type should match"
 
     def test_tree_behind_observer_no_block(self, env_simple):
         """Trees behind observer don't block vision."""
