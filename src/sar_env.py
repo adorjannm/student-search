@@ -484,9 +484,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
             # 3. Safe Zones (with visibility masking)
             for sz_i in range(self.num_safe_zones):
-                if self._is_visible(
-                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
-                ):
+                if self._is_visible(my_pos, self.safezone_pos[sz_i]):
                     rel_pos = self.safezone_pos[sz_i] - my_pos
                     # We append the numeric type (0-3) so the network knows which zone is which
                     obs_vec.extend(
@@ -499,7 +497,7 @@ class SearchAndRescueEnv(ParallelEnv):
             # 4. Trees (pad to max_trees for curriculum learning)
             for t_i in range(self.max_trees):
                 if t_i < self.num_trees and self._is_visible(
-                    my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
+                    my_pos, self.tree_pos[t_i], exclude_tree_idx=t_i
                 ):
                     obs_vec.extend(self.tree_pos[t_i] - my_pos)
                 else:
@@ -511,7 +509,7 @@ class SearchAndRescueEnv(ParallelEnv):
             for v_i in range(self.num_victims):
                 # If visible and not saved
                 if not self.victim_saved[v_i] and self._is_visible(
-                    my_pos, self.victim_pos[v_i], self.agent_size
+                    my_pos, self.victim_pos[v_i]
                 ):
                     rel = self.victim_pos[v_i] - my_pos
                     # Use numeric type (0-3) for observation

@@ -246,17 +246,20 @@ def check_visibility(
     env: SearchAndRescueEnv,
     observer_pos: np.ndarray,
     target_pos: np.ndarray,
-    target_radius: float,
+    target_radius: float = None,  # Kept for backwards compatibility, but ignored
     exclude_tree_idx: Optional[int] = None,
 ) -> bool:
     """Check if target is visible from observer.
 
     This is a test helper that wraps the private _is_visible method.
     Used for testing visibility/occlusion logic.
+
+    Note: target_radius parameter is kept for backwards compatibility but is
+    no longer used by _is_visible.
     """
     # Use getattr to access protected method - intentional for testing
     is_visible_fn = getattr(env, "_is_visible")
-    return is_visible_fn(observer_pos, target_pos, target_radius, exclude_tree_idx)
+    return is_visible_fn(observer_pos, target_pos, exclude_tree_idx)
 
 
 # =============================================================================
