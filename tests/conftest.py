@@ -110,30 +110,37 @@ def move_action(dx: float = 0.0, dy: float = 0.0) -> np.ndarray:
 
 
 def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
-    """Calculate slice indices for different observation components.
-
+    """
     Updated observation structure:
     - [0:2] Self velocity (2)
     - [2:4] Self position (2)
     - [4:4+num_rescuers] Agent ID one-hot (num_rescuers)
-    - landmarks (n_closest_landmarks * 2: rel_x, rel_y)
+    - [..:+1] Energy (optional, normalized)
+    - landmarks (n_closest_landmarks * 5: rel_x, rel_y, visible_bit, is_safezone_bit, safezone_type)
     - victims (num_victims * 4: rel_x, rel_y, type, visible_bit)
     - other rescuers ((num_rescuers - 1) * 3: rel_x, rel_y, visible_bit)
     """
     base = 4  # vel(2) + pos(2)
     agent_id_end = base + env.num_rescuers
-    landmarks_end = agent_id_end + env.n_closest_landmarks * 2
+
+    energy_end = agent_id_end + (1 if getattr(env, "energy_enabled", False) else 0)
+
+    landmarks_end = energy_end + env.n_closest_landmarks * 5
     victims_end = landmarks_end + env.num_victims * 4
     others_end = victims_end + (env.num_rescuers - 1) * 3
 
-    return {
+    slices = {
         "self_vel": slice(0, 2),
         "self_pos": slice(2, 4),
         "agent_id": slice(4, agent_id_end),
-        "landmarks": slice(agent_id_end, landmarks_end),
+        "landmarks": slice(energy_end, landmarks_end),
         "victims": slice(landmarks_end, victims_end),
         "other_agents": slice(victims_end, others_end),
     }
+    if getattr(env, "energy_enabled", False):
+        slices["energy"] = slice(agent_id_end, energy_end)
+
+    return slices
 
 
 def get_landmark_obs(
@@ -141,12 +148,12 @@ def get_landmark_obs(
 ) -> np.ndarray:
     """Extract observation for a specific landmark (rel_x, rel_y)."""
     lm_slice = slices["landmarks"]
-    n_landmarks = (lm_slice.stop - lm_slice.start) // 2
+    n_landmarks = (lm_slice.stop - lm_slice.start) // 5
     if not (0 <= landmark_idx < n_landmarks):
         raise IndexError(
             f"landmark_idx {landmark_idx} out of bounds for {n_landmarks} landmarks"
         )
-    start = lm_slice.start + landmark_idx * 2
+    start = lm_slice.start + landmark_idx * 5
     return obs_vec[start : start + 2]  # noqa: E203
 
 

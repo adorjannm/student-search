@@ -310,8 +310,9 @@ class TestObservationStructure:
         expected_obs_dim = (
             4  # vel(2) + pos(2)
             + env.num_rescuers  # agent ID one-hot
-            + (env.n_closest_landmarks * 2)  # landmarks (rel_x, rel_y)
-            + (env.num_victims * 4)  # victims (rel_x, rel_y, type, visible_bit)
+            + (1 if getattr(env, "energy_enabled", False) else 0)  # energy
+            + (env.n_closest_landmarks * 5)  # landmarks
+            + (env.num_victims * 4)  # victims
             + ((env.num_rescuers - 1) * 3)  # other rescuers
         )
 
