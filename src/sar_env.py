@@ -970,10 +970,60 @@ class SearchAndRescueEnv(ParallelEnv):
 
     def _compute_rewards(self, rewards) -> int:
         """
-        Assignment-aware reward shaping:
-        - If an agent is escorting (has an assigned victim), shape progress to the correct safe zone.
-        - If not escorting, shape movement toward the nearest *unassigned* victim.
-        Also keeps sparse success reward (+100) for saving, plus collision/boundary/idle penalties.
+        Compute multi-component shaped rewards for the rescue task.
+
+        This method implements assignment-aware reward shaping that guides agents through
+        the victim rescue workflow: approach unassigned victims, escort assigned victims
+        to matching safe zones, and receive sparse success bonuses upon rescue completion.
+
+        Reward Components:
+        ------------------
+        1. **Pickup Shaping** (for non-escorting agents):
+           - Distance penalty: -0.1 × distance_to_nearest_unassigned_victim
+           - Delta shaping: +0.2 × (prev_dist - curr_dist)
+           - Encourages agents without assignments to approach available victims
+
+        2. **Sparse Success Reward**:
+           - +100.0 for each victim successfully delivered to matching safe zone
+           - Awarded to the assigned agent when victim enters zone radius
+           - Only one reward per victim per episode
+
+        3. **Escort Shaping** (for agents with assigned victims):
+           - Bounded dense shaping: +1.0 × bounded_zone_proximity
+             (mapped to [0,1] via exponential decay, prevents reward blowup)
+           - Delta shaping: +0.5 × (prev_zone_dist - curr_zone_dist)
+           - Encourages agents to bring their assigned victims closer to correct safe zones
+
+        4. **Boundary Penalties**:
+           - -0.2 for approaching arena boundaries (|x| > 0.95 or |y| > 0.95)
+           - Discourages agents from leaving the operational area
+
+        5. **Agent Collision Penalty**:
+           - -1.0 to each agent when inter-agent distance < 0.15
+           - Promotes spatial diversity and prevents excessive clustering
+
+        6. **Idle Penalty**:
+           - -0.01 for agents with velocity magnitude < 1e-3
+           - Encourages active movement and exploration
+
+        State Tracking:
+        ---------------
+        - `prev_agent_pickup_dists`: Per-agent distance to nearest unassigned victim
+        - `prev_victim_zone_dists`: Per-victim distance to matching safe zone
+        - Both used for delta-based progress shaping across timesteps
+
+        Args:
+            rewards: Dictionary mapping agent names to float rewards (modified in-place)
+
+        Returns:
+            int: Number of victims successfully saved this step (newly saved only)
+
+        Notes:
+        ------
+        - Agents dynamically switch between pickup and escort modes based on assignment state
+        - Escort shaping only activates when victim is assigned and not yet saved
+        - All distance-based rewards use Euclidean L2 norm
+        - Reward weights are tuned for balance between exploration, coordination, and task completion
         """
 
         # -----------------------------
