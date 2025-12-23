@@ -12,7 +12,7 @@ from src.train import train
 
 
 def launch_tensorboard(log_dir: str, port: int = 6006):
-    """Launch TensorBoard in a subprocess."""
+    """Launch TensorBoard server as a blocking subprocess."""
     print(f"Launching TensorBoard at http://localhost:{port}")
     print(f"Log directory: {log_dir}")
     try:
@@ -29,6 +29,14 @@ def launch_tensorboard(log_dir: str, port: int = 6006):
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    """
+    Hydra entry point for training, evaluation, or TensorBoard launch.
+
+    Modes (mutually exclusive):
+        - tensorboard.active=true: Launch TensorBoard server
+        - train.active=true: Run MAPPO training
+        - eval.active=true: Run policy evaluation
+    """
     # Check for tensorboard mode
     tb_active = cfg.get("tensorboard", {}).get("active", False)
 

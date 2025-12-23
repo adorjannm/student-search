@@ -12,6 +12,13 @@ from src.seed_utils import set_seed
 
 
 class SearchAndRescueEnv(ParallelEnv):
+    """
+    Multi-agent search and rescue environment with partial observability.
+
+    Rescuer agents must locate victims and escort them to type-matching safe zones.
+    Features vision-based occlusion, energy management, and recharging stations.
+    """
+
     metadata = {"render_modes": ["human", "rgb_array"], "name": "search_rescue_v2"}
 
     def __init__(
@@ -176,47 +183,47 @@ class SearchAndRescueEnv(ParallelEnv):
         self.clock = None
 
         # Metrics state (reset each episode)
-        self._cell_size = 0.05
+        self._cell_size = 0.05  # Grid cell size for coverage tracking
         self._episode_counter = 0
         self._visited_cells = []
         self._collision_events = 0
         self._completed_episode_metrics = []
 
     def _reset_metrics(self) -> None:
-        """Reset per-episode metric trackers."""
+        """Reset per-episode metric trackers (coverage, collisions)."""
         self._visited_cells = [set() for _ in range(self.num_rescuers)]
         self._collision_events = 0
 
     def _hash_pos(self, pos: np.ndarray) -> tuple[int, int]:
+        """Convert continuous position to discrete grid cell coordinates."""
         return tuple(np.floor(pos / self._cell_size).astype(int))
 
     def pop_episode_metrics(self) -> list[dict]:
-        """Return and clear metrics for episodes that completed since last call."""
+        """Return and clear metrics for episodes completed since last call."""
         metrics = self._completed_episode_metrics
         self._completed_episode_metrics = []
         return metrics
 
     def set_num_trees(self, num_trees: int) -> None:
         """
-        Update the number of trees (occluders) in the environment.
+        Set pending tree count for curriculum learning.
 
-        This is useful for curriculum learning where difficulty increases
-        by adding more occluders over time. Changes take effect on next reset().
-
-        Note: This only updates the target tree count. The actual tree positions
-        are created during reset(), so changes won't take effect until the
-        current episode ends and a new one begins.
-
-        Args:
-            num_trees: New number of trees to use
+        Changes take effect on next reset(). Observation space remains fixed
+        to max_trees to avoid dimension mismatch during training.
         """
-        # Store the target tree count
-        # We don't update obs_dim or observation_spaces here because that would
-        # cause dimension mismatch errors during the current episode.
-        # Instead, we wait for the next reset() to apply the changes.
         self._pending_num_trees = num_trees
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        """
+        Reset the environment to initial state.
+
+        Args:
+            seed: Random seed for reproducibility.
+            options: Additional reset options (unused).
+
+        Returns:
+            Tuple of (observations, infos) following Gymnasium API.
+        """
         self.steps = 0
 
         if seed is not None:
@@ -297,15 +304,19 @@ class SearchAndRescueEnv(ParallelEnv):
     def _is_visible(
         self, observer_pos, target_pos, target_radius, exclude_tree_idx=None
     ):
-        """Checks whether a target is within vision range and not occluded by trees.
+        """
+        Check if target is within vision range and not occluded by trees.
+
+        Uses ray-circle intersection to detect line-of-sight occlusion.
+
         Args:
-            observer_pos: Position of the observer.
-            target_pos: Position of the target to check visibility of.
-            target_radius: Radius of the target. Currently unused, kept for API compatibility
-                and potential future use in more detailed visibility calculations.
-            exclude_tree_idx: Optional tree index to exclude from the occlusion check
-                (e.g., when checking if a tree itself is visible). Occlusion is currently
-                determined using the environment's ``tree_radius`` for all trees.
+            observer_pos: Observer's position.
+            target_pos: Target's position.
+            target_radius: Target's radius (reserved for future use).
+            exclude_tree_idx: Tree index to skip (e.g., when checking tree visibility).
+
+        Returns:
+            True if target is visible, False otherwise.
         """
         # If vision radius is zero, nothing is visible
         if self.vision_radius == 0.0:
@@ -355,6 +366,12 @@ class SearchAndRescueEnv(ParallelEnv):
         return True
 
     def _get_obs(self):
+        """
+        Construct partial observations for all agents.
+
+        Each observation includes: self state, agent ID, energy, N closest
+        landmarks, victim info, and other rescuer positions (visibility-masked).
+        """
         observations = {}
         for i, agent in enumerate(self.agents):
             # If agent was removed (e.g. done), skip
@@ -442,6 +459,15 @@ class SearchAndRescueEnv(ParallelEnv):
         return observations
 
     def step(self, actions):
+        """
+        Execute one environment step.
+
+        Args:
+            actions: Dict mapping agent names to actions.
+
+        Returns:
+            Tuple of (observations, rewards, terminations, truncations, infos).
+        """
         rewards = {a: 0.0 for a in self.agents}
         terminations = {a: False for a in self.agents}
         truncations = {a: False for a in self.agents}
@@ -715,6 +741,7 @@ class SearchAndRescueEnv(ParallelEnv):
         return self._get_obs(), rewards, terminations, truncations, infos
 
     def render(self):
+        """Render the environment using pygame if render_mode is set."""
         if self.render_mode is None:
             return
 
@@ -804,18 +831,19 @@ class SearchAndRescueEnv(ParallelEnv):
         self.clock.tick(30)
 
     def close(self):
+        """Clean up pygame resources."""
         if self.screen:
             pygame.quit()
 
     def _get_matching_zone_idx(self, victim_type: int) -> Optional[int]:
-        """Find the safe zone index that accepts the given victim type."""
+        """Return safe zone index matching the given victim type, or None."""
         for zone_idx, zone_type in enumerate(self.safe_zone_types):
             if zone_type == victim_type:
                 return zone_idx
         return None
 
     def _compute_agent_victim_dists(self) -> list[float]:
-        """Compute min distance from each agent to nearest unsaved victim."""
+        """Return minimum distance from each agent to nearest unsaved victim."""
         dists = []
         unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
         for i in range(self.num_rescuers):
@@ -830,19 +858,12 @@ class SearchAndRescueEnv(ParallelEnv):
         return dists
 
     def _bounded_zone_shaping(self, dist_to_zone: float) -> float:
-        """
-        Bounded shaping for escorting a victim to its safe zone.
-        Returns a value in [0, 1], higher when closer.
-        """
-        # Smooth, bounded, stable (no explosion near 0)
-        scale = 0.5  # adjust: smaller => steeper near zone
+        """Return exponential shaping reward in [0, 1], higher when closer to zone."""
+        scale = 0.5
         return float(np.exp(-dist_to_zone / scale))
 
     def _nearest_unassigned_victim_dist(self, agent_idx: int) -> float:
-        """
-        Distance from an agent to the nearest *unassigned* and *unsaved* victim.
-        If none exist, returns 0.0
-        """
+        """Return distance to nearest unassigned, unsaved victim (0.0 if none)."""
         best = float("inf")
         for v_i in range(self.num_victims):
             if self.victim_saved[v_i]:
@@ -856,12 +877,14 @@ class SearchAndRescueEnv(ParallelEnv):
 
     def _compute_rewards(self, rewards) -> int:
         """
-        Assignment-aware reward shaping:
-        - If an agent is escorting (has an assigned victim), shape progress to the correct safe zone.
-        - If not escorting, shape movement toward the nearest *unassigned* victim.
-        Also keeps sparse success reward (+100) for saving, plus collision/boundary/idle penalties.
-        """
+        Compute shaped rewards and process rescue events.
 
+        Includes: pickup shaping, escort-to-zone shaping, sparse rescue bonus,
+        boundary penalties, collision penalties, and idle penalties.
+
+        Returns:
+            Number of victims currently saved.
+        """
         # -----------------------------
         # 1) PICKUP shaping (unassigned agents -> nearest unassigned victim)
         # -----------------------------
@@ -991,6 +1014,16 @@ class SearchAndRescueEnv(ParallelEnv):
 
 
 def make_env(device: Union[torch.device, str] = "cpu", **kwargs) -> TransformedEnv:
+    """
+    Create a TorchRL-wrapped SearchAndRescueEnv with reward tracking.
+
+    Args:
+        device: Torch device for tensor operations.
+        **kwargs: Arguments passed to SearchAndRescueEnv.
+
+    Returns:
+        TransformedEnv with PettingZoo wrapper and RewardSum transform.
+    """
     env = SearchAndRescueEnv(**kwargs)
     group_map = {"agents": env.possible_agents}
     env = PettingZooWrapper(env, group_map=group_map, use_mask=True, device=device)

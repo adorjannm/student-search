@@ -12,20 +12,11 @@ import os
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
     """
-    Set random seeds for all libraries to ensure reproducibility.
-
-    This function configures all random number generators (Python, NumPy, PyTorch)
-    to use the same seed, ensuring that runs with the same seed produce identical results.
+    Set random seeds across Python, NumPy, and PyTorch for reproducibility.
 
     Args:
-        seed: The random seed to use across all libraries
-        deterministic: If True, enables PyTorch's deterministic mode for CUDA operations.
-                      This may impact performance but ensures full reproducibility.
-
-    Note:
-        When deterministic=True, some PyTorch operations may be slower and some
-        operations may not have deterministic implementations. In such cases,
-        PyTorch will raise an error.
+        seed: Random seed for all RNGs.
+        deterministic: Enable PyTorch deterministic mode (may reduce performance).
     """
     # Python's built-in random module
     random.seed(seed)
@@ -63,17 +54,14 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
 
 def get_generator(seed: int, device: str = "cpu") -> torch.Generator:
     """
-    Create a PyTorch random number generator with a specific seed.
-
-    Useful for operations that accept a generator parameter to ensure
-    local reproducibility without affecting the global RNG state.
+    Create a seeded PyTorch Generator for local reproducibility.
 
     Args:
-        seed: Seed for the generator
-        device: Device for the generator ('cpu' or 'cuda')
+        seed: Seed for the generator.
+        device: Device for the generator ('cpu' or 'cuda').
 
     Returns:
-        A seeded torch.Generator instance
+        Seeded torch.Generator instance.
     """
     generator = torch.Generator(device=device)
     generator.manual_seed(seed)

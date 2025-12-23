@@ -1,3 +1,5 @@
+"""Policy evaluation module for trained search and rescue agents."""
+
 from time import sleep
 
 import numpy as np
@@ -14,8 +16,19 @@ from torchrl.envs.utils import step_mdp
 
 def find_latest_model(save_folder: str, env_name: str) -> str:
     """
-    Finds the latest .pt file in the save_folder based on modification time.
-    Searches recursively in dated subdirectories (e.g., save_folder/20251220-000020/*.pt)
+    Find the most recently modified .pt checkpoint in save_folder.
+
+    Searches recursively in subdirectories first, then falls back to flat search.
+
+    Args:
+        save_folder: Root directory to search.
+        env_name: Environment name (unused, kept for API compatibility).
+
+    Returns:
+        Path to the latest model file.
+
+    Raises:
+        FileNotFoundError: If no .pt files are found.
     """
     # First try recursive search in dated subdirectories
     search_pattern = os.path.join(save_folder, "**", "*.pt")
@@ -38,8 +51,8 @@ def find_latest_model(save_folder: str, env_name: str) -> str:
 
 
 def _get_metrics_env(env):
+    """Unwrap environment to find the base env exposing episode metrics."""
     base = getattr(env, "base_env", None)
-    # Walk down wrappers until we find the environment exposing metrics
     while base is not None and not hasattr(base, "pop_episode_metrics"):
         base = getattr(base, "base_env", getattr(base, "_env", None))
     return base if base is not None else env
@@ -53,6 +66,19 @@ def evaluate(
     seed: int = 0,
     **env_kwargs,
 ):
+    """
+    Evaluate a trained policy on the search and rescue environment.
+
+    Loads a checkpoint, runs episodes with rendering, and logs metrics.
+
+    Args:
+        model_path: Path to .pt checkpoint (auto-detects latest if None).
+        save_folder: Directory for logs and model search.
+        num_games: Number of evaluation episodes.
+        enable_logging: Enable TensorBoard logging.
+        seed: Random seed for reproducibility.
+        **env_kwargs: Environment configuration (overridden by checkpoint if available).
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 

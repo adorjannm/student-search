@@ -1,3 +1,5 @@
+"""MAPPO training module for multi-agent search and rescue."""
+
 import numpy as np
 import torch
 from torchrl.envs import check_env_specs
@@ -14,6 +16,7 @@ from src.seed_utils import set_seed
 
 
 def _get_metrics_env(env):
+    """Unwrap environment to find the base env exposing episode metrics."""
     base = getattr(env, "base_env", None)
     while base is not None and not hasattr(base, "pop_episode_metrics"):
         base = getattr(base, "base_env", getattr(base, "_env", None))
@@ -35,6 +38,27 @@ def train(
     curriculum_num_stages: int = 5,
     **env_kwargs,
 ):
+    """
+    Train agents using MAPPO (Multi-Agent PPO) with optional curriculum learning.
+
+    Uses decentralized actors with a centralized critic (CTDE paradigm).
+    Supports both discrete and continuous action spaces.
+
+    Args:
+        steps: Total environment frames to collect.
+        batch_size: Minibatch size for PPO updates.
+        learning_rate: Adam optimizer learning rate.
+        num_epochs: PPO epochs per batch.
+        frames_per_batch: Frames collected before each update.
+        seed: Random seed for reproducibility.
+        save_folder: Directory for checkpoints and logs.
+        enable_logging: Enable TensorBoard logging.
+        curriculum_enabled: Enable curriculum learning (progressive tree count).
+        curriculum_min_trees: Starting tree count for curriculum.
+        curriculum_max_trees: Final tree count for curriculum.
+        curriculum_num_stages: Number of curriculum stages.
+        **env_kwargs: Additional environment configuration.
+    """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")

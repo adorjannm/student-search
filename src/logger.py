@@ -1,28 +1,4 @@
-"""
-Reusable TensorBoard logging module for training and evaluation.
-
-This module provides a clean, reusable interface for TensorBoard logging
-that can be used across training, evaluation, and other components.
-
-Usage Examples:
-    Basic usage with RunContext:
-        >>> from src.logger import RunContext, TensorboardLogger
-        >>> ctx = RunContext(base_dir="logs", run_name="experiment_1")
-        >>> logger = TensorboardLogger.create(ctx=ctx, enabled=True)
-        >>> logger.log_scalar("train/reward", 0.95, step=100)
-        >>> logger.log_dict("losses", {"policy": 0.1, "value": 0.05}, step=100)
-        >>> logger.close()
-
-    Usage without RunContext (direct log directory):
-        >>> logger = TensorboardLogger.create(log_dir="logs/tensorboard", enabled=True)
-        >>> logger.log_scalar("eval/score", 0.8, step=1)
-        >>> logger.close()
-
-    Disabled logging (returns NoOpLogger):
-        >>> logger = TensorboardLogger.create(enabled=False)
-        >>> logger.log_scalar("anything", 1.0, step=1)  # Does nothing
-        >>> logger.close()  # Does nothing
-"""
+"""Reusable TensorBoard logging module for training and evaluation."""
 
 from __future__ import annotations
 
@@ -52,12 +28,7 @@ class Logger(Protocol):
 
 
 class RunContext:
-    """
-    Manages run-specific directories and paths.
-
-    This class is responsible for creating and managing directories
-    for a single run, following the Single Responsibility Principle.
-    """
+    """Manages run-specific directories (logs, checkpoints, tensorboard)."""
 
     def __init__(
         self,
@@ -69,9 +40,9 @@ class RunContext:
         Initialize a run context.
 
         Args:
-            base_dir: Base directory for all runs
-            run_name: Optional name for this specific run. If None, uses timestamp.
-            create_subdirs: Whether to create subdirectories immediately
+            base_dir: Base directory for all runs.
+            run_name: Run identifier (defaults to timestamp).
+            create_subdirs: Create directories immediately if True.
         """
         self.base_dir = Path(base_dir)
         self.run_name = run_name or self._generate_run_name()
@@ -83,13 +54,13 @@ class RunContext:
 
     @staticmethod
     def _generate_run_name() -> str:
-        """Generate a unique run name based on timestamp."""
+        """Generate timestamp-based run name."""
         from datetime import datetime
 
         return datetime.now().strftime("%Y%m%d-%H%M%S")
 
     def ensure_dirs(self) -> None:
-        """Ensure all required directories exist."""
+        """Create run directories if they don't exist."""
         self.tb_run_dir.mkdir(parents=True, exist_ok=True)
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,20 +87,15 @@ class NoOpLogger:
 
 
 class TensorboardLogger:
-    """
-    TensorBoard logger implementation.
-
-    Wraps torch.utils.tensorboard.SummaryWriter with a clean interface
-    that can be used across training, evaluation, and other components.
-    """
+    """TensorBoard logger wrapping SummaryWriter."""
 
     def __init__(self, writer: SummaryWriter, ctx: RunContext | None = None):
         """
         Initialize the TensorBoard logger.
 
         Args:
-            writer: The SummaryWriter instance to use
-            ctx: Optional run context for reference
+            writer: SummaryWriter instance.
+            ctx: Optional RunContext for directory reference.
         """
         if SummaryWriter is None:
             raise ImportError(
@@ -154,7 +120,7 @@ class TensorboardLogger:
             enabled: Whether logging is enabled. If False, returns NoOpLogger.
 
         Returns:
-            Logger instance (TensorboardLogger or NoOpLogger)
+            TensorboardLogger or NoOpLogger instance.
         """
         if not enabled:
             return NoOpLogger()
@@ -199,14 +165,12 @@ class TensorboardLogger:
             if value is None:
                 continue
             try:
-                # Try to convert to float, skip if not possible
                 float_value = float(value)
                 tag = f"{prefix}/{key}" if prefix else key
                 self.log_scalar(tag, float_value, step)
             except (ValueError, TypeError):
-                # Skip non-numeric values
                 continue
 
     def close(self) -> None:
-        """Close the writer and flush any pending writes."""
+        """Close writer and flush pending writes."""
         self._writer.close()

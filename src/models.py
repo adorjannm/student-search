@@ -8,9 +8,11 @@ from torch.distributions import Categorical
 
 
 class SplitLayer(nn.Module):
+    """Split network output into location and scale for TanhNormal distribution."""
+
     def forward(self, x):
-        # x shape: [..., 2, action_dim]
-        return x[..., 0, :], x[..., 1, :].exp()  # loc, scale (positive)
+        """Split tensor along second-to-last dim into loc and exp(scale)."""
+        return x[..., 0, :], x[..., 1, :].exp()
 
 
 def make_policy(
@@ -19,6 +21,18 @@ def make_policy(
     device: Union[torch.device, str] = "cpu",
     discrete: bool = False,
 ) -> ProbabilisticActor:
+    """
+    Create a multi-agent policy network.
+
+    Args:
+        env: TorchRL environment with observation and action specs.
+        num_rescuers: Number of agents sharing the policy.
+        device: Torch device for computation.
+        discrete: If True, use Categorical policy; else TanhNormal (continuous).
+
+    Returns:
+        ProbabilisticActor with shared parameters across agents.
+    """
     if discrete:
         # Discrete action policy
         policy_net = MultiAgentMLP(
@@ -83,7 +97,20 @@ def make_policy(
 
 
 def make_critic(env, num_rescuers: int, device: Union[torch.device, str] = "cpu"):
+    """
+    Create a centralized critic network for MAPPO.
 
+    The critic observes all agents' observations (centralised=True)
+    while sharing parameters across agents.
+
+    Args:
+        env: TorchRL environment with observation spec.
+        num_rescuers: Number of agents.
+        device: Torch device for computation.
+
+    Returns:
+        ValueOperator outputting per-agent state values.
+    """
     critic_net = MultiAgentMLP(
         n_agent_inputs=env.observation_spec["agents", "observation"].shape[-1],
         n_agent_outputs=1,
