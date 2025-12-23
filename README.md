@@ -138,12 +138,10 @@ Training begins with an obstacle-free environment and progressively increases di
 
 **Progression Formula:**
 
-$$
-\text{trees\_stage} = \text{min\_trees} + \left\lfloor
-    \dfrac{\text{stage}}{\text{num\_stages} - 1} \cdot
-    \left( \text{max\_trees} - \text{min\_trees} \right)
-\right\rfloor
-$$
+```
+trees(stage) = min_trees + floor(stage / (num_stages - 1) × (max_trees - min_trees))
+```
+
 ### Reward System
 
 The reward structure combines sparse success signals with dense shaping:
@@ -191,9 +189,9 @@ Each agent receives a **local observation vector** with partial observability:
 
 **Default Configuration (6 rescuers, 12 victims, 9 landmarks, N=5 closes landmarks):**
 
-$$
-\text{obs\_dim} = 2 + 2 + 6 + 1 + (9 \cdot 5) + (12 \cdot 4) + (5 \cdot 3) = 119
-$$
+```
+obs_dim = 2 + 2 + 6 + 1 + (9 × 5) + (12 × 4) + (5 × 3) = 119
+```
 
 **Visibility Masking:**
 
@@ -210,11 +208,11 @@ $$
 
 **Physics Model:**
 
-$$
-v_{t+1} = 0.8 \times v_t + 0.1 \times a_t \\
-v_{t+1} = \text{clip}(v_{t+1}, \text{max\_speed}=0.08) \\
+```
+v_{t+1} = 0.8 × v_t + 0.1 × a_t
+v_{t+1} = clip(v_{t+1}, max_speed=0.08)
 x_{t+1} = x_t + v_{t+1}
-$$
+```
 
 ### Energy System
 
@@ -381,8 +379,8 @@ This project was developed as part of the **ELTE Collective Intelligence Course 
 | Member                 | Contributions                                                                                                                                                                                             |
 |------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Adorján Nagy-Mohos** | TorchRL migration, Curriculum learning, CTDE/MAPPO architecture, Hydra + Docker integration, Victim dynamics, Scenario generation, Vision system (occlusion logic fix), Continuous control implementation |
-| **Máté Kovács**        | Infrastructure (TensorBoard logging), Testing suite, Documentation (LaTeX/Docstrings), README.md, Metrics analysis, Environment refactoring                                                               |
-| **Sándor Baranyi**     | Vision system (N-closest landmark), Ablation studies, Energy budget features                                                                                                                              |
+| **Máté Kovács**        | Infrastructure (TensorBoard logging), Testing suite, Documentation (LaTeX/Docstrings), README.md, Metrics analysis,                                                                                       |
+| **Sándor Baranyi**     | Vision system (N-closest landmark), Ablation studies, Energy budget features, Bounded Box observation space, Victim dynamics                                                                              |
 
 _All team members contributed equally (~33% each)._
 
