@@ -55,7 +55,7 @@ We employ **MAPPO** with the **CTDE paradigm**—decentralized actors for scalab
 ### Docker (Recommended)
 
 ```bash
-# Build the figures
+# Build the image
 make build
 # or: docker build -t student-search:latest -f docker/Dockerfile .
 
