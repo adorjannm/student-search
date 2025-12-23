@@ -55,7 +55,7 @@ We employ **MAPPO** with the **CTDE paradigm**—decentralized actors for scalab
 ### Docker (Recommended)
 
 ```bash
-# Build the image
+# Build the figures
 make build
 # or: docker build -t student-search:latest -f docker/Dockerfile .
 
@@ -278,7 +278,7 @@ We conducted ablation studies to analyze the impact of key hyperparameters on ag
 Comparing wide vs. narrow field of view:
 
 ```bash
-# Wide vision (default-like)
+# Wide vision
 python -m src.main train.active=true env.vision_radius=0.5
 
 # Narrow vision (restricted)
@@ -287,18 +287,21 @@ python -m src.main train.active=true env.vision_radius=0.1333
 
 | Metric          | vision_radius=0.5 | vision_radius=0.1333 |
 | --------------- | ----------------- | -------------------- |
-| **Rescues (%)** | _TBD_             | _TBD_                |
-| **Collisions**  | _TBD_             | _TBD_                |
-| **Coverage**    | _TBD_             | _TBD_                |
+| **Rescues (%)** | ~17% (avg)        | ~25% (avg)           |
+| **Collisions**  | ~210 (avg)        | ~140 (avg)           |
+| **Coverage**    | ~340 (avg)        | ~290 (avg)           |
 
-<!-- TODO: Add vision radius ablation plot -->
+![Vision Radius 0.5 Ablation](figures/README/abl1_visionradius05.png)
+![Vision Radius 0.1333 Ablation](figures/README/abl1_visionradius01333.png)
+
+**Analysis:** Counter-intuitively, the narrower vision radius (0.1333) achieved slightly higher rescue rates while maintaining lower collision counts. This suggests that restricted vision may encourage more cautious, deliberate navigation behavior. However, the wider vision radius (0.5) resulted in better coverage, as agents could detect and respond to more of the environment. The trade-off indicates that vision radius should be tuned based on whether exploration or safe navigation is prioritized.
 
 #### N Closest Landmarks Ablation
 
 Comparing rich vs. sparse landmark observations:
 
 ```bash
-# Rich landmark info (default)
+# Rich landmark info
 python -m src.main train.active=true env.n_closest_landmarks=9
 
 # Sparse landmark info
@@ -307,11 +310,14 @@ python -m src.main train.active=true env.n_closest_landmarks=3
 
 | Metric          | n_closest_landmarks=9 | n_closest_landmarks=3 |
 | --------------- | --------------------- | --------------------- |
-| **Rescues (%)** | _TBD_                 | _TBD_                 |
-| **Collisions**  | _TBD_                 | _TBD_                 |
-| **Coverage**    | _TBD_                 | _TBD_                 |
+| **Rescues (%)** | ~45% (avg)            | ~25% (avg)            |
+| **Collisions**  | ~300 (avg)            | ~280 (avg)            |
+| **Coverage**    | ~650 (avg)            | ~530 (avg)            |
 
-<!-- TODO: Add n_closest_landmarks ablation plot -->
+![N Closest Landmarks 9 Ablation](figures/README/abl2_nclosest9.png)
+![N Closest Landmarks 3 Ablation](figures/README/abl2_nclosest3.png)
+
+**Analysis:** Providing richer landmark information (N=9) significantly improved rescue performance (~45% vs ~25%), demonstrating that agents benefit from more complete environmental awareness. The higher collision count with N=9 is likely due to increased exploration behavior, as evidenced by the substantially higher coverage (~650 vs ~530 cells). Agents with sparse landmark observations (N=3) appear more conservative but less effective at completing the rescue task. This ablation confirms that landmark observation richness is a critical hyperparameter for task success.
 
 ### Failure Modes
 
@@ -427,10 +433,10 @@ python -m src.main train.active=true env.rescuers=8 curriculum.enabled=false
 This project was developed as part of the **ELTE Collective Intelligence Course (Assignment 2)**.
 
 | Member                 | Contributions                                                                                                                                                                                             |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ---------------------- |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Adorján Nagy-Mohos** | TorchRL migration, Curriculum learning, CTDE/MAPPO architecture, Hydra + Docker integration, Victim dynamics, Scenario generation, Vision system (occlusion logic fix), Continuous control implementation |
-| **Máté Kovács**        | Infrastructure (TensorBoard logging), Testing suite, Documentation (LaTeX/Docstrings), README.md, Metrics analysis,                                                                                       |
-| **Sándor Baranyi**     | Vision system (N-closest landmark), Ablation studies, Energy budget features, Bounded Box observation space, Victim dynamics                                                                              |
+| **Máté Kovács**        | Infrastructure (TensorBoard logging), Testing suite, Documentation (LaTeX/Docstrings), README.md, Metrics analysis, Presentation                                                                          |
+| **Sándor Baranyi**     | Vision system (N-closest landmark), Ablation studies, Energy budget features, Bounded Box observation space, Victim dynamics                                                                                |
 
 _All team members contributed equally (~33% each)._
 
