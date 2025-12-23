@@ -89,6 +89,7 @@ def main(cfg: DictConfig):
             enable_logging=enable_logging,
             render_mode=cfg.eval.render_mode,
             seed=cfg.seed,
+            model_path=cfg.eval.model_path,
             **env_kwargs,
         )
 

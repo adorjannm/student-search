@@ -15,6 +15,7 @@ metrics including rewards, episode lengths, and per-step rewards.
 """
 
 from time import sleep
+from typing import Optional
 
 import numpy as np
 
@@ -84,7 +85,7 @@ def _get_metrics_env(env):
 
 
 def evaluate(
-    model_path: str = None,
+    model_path: Optional[str] = None,
     save_folder: str = "search_rescue_logs",
     num_games: int = 3,
     enable_logging: bool = True,
