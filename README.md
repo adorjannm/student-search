@@ -105,7 +105,7 @@ python -m src.main tensorboard.active=true
 We implement **Centralized Training, Decentralized Execution (CTDE)** using MAPPO:
 
 | Component          | Architecture                 | Scope                                        |
-|--------------------|------------------------------|----------------------------------------------|
+| ------------------ | ---------------------------- | -------------------------------------------- |
 | **Actor (Policy)** | 2-layer MLP, 64 units, Tanh  | Decentralized — uses only local observations |
 | **Critic (Value)** | 2-layer MLP, 128 units, Tanh | Centralized — observes all agent states      |
 
@@ -123,7 +123,7 @@ The actor outputs parameters for a `TanhNormal` distribution (continuous) or `Ca
 Training begins with an obstacle-free environment and progressively increases difficulty:
 
 | Stage | Trees | Difficulty                               |
-|-------|-------|------------------------------------------|
+| ----- | ----- | ---------------------------------------- |
 | 0     | 0     | Trivial — agents learn basic navigation  |
 | 1     | 2     | Easy — sparse occlusion                  |
 | 2     | 4     | Medium — moderate path planning required |
@@ -149,7 +149,7 @@ The reward structure combines sparse success signals with dense shaping:
 #### Positive Rewards
 
 | Event                 | Reward                     | Recipient                                       |
-|-----------------------|----------------------------|-------------------------------------------------|
+| --------------------- | -------------------------- | ----------------------------------------------- |
 | **Successful rescue** | `+100.0`                   | Assigned rescuer (victim reaches matching zone) |
 | **Escort proximity**  | `+1.0 × exp(-d / 0.5)`     | Assigned rescuer (bounded shaping)              |
 | **Escort delta**      | `+0.5 × (d_prev - d_curr)` | Assigned rescuer (progress toward zone)         |
@@ -158,7 +158,7 @@ The reward structure combines sparse success signals with dense shaping:
 #### Penalties
 
 | Event                  | Penalty    | Recipient                                        |
-|------------------------|------------|--------------------------------------------------|
+| ---------------------- | ---------- | ------------------------------------------------ |
 | **Tree collision**     | `-1.0`     | Colliding rescuer                                |
 | **Agent collision**    | `-1.0`     | Both colliding rescuers (dist < 0.15)            |
 | **Boundary violation** | `-0.2`     | Rescuer near edge (\|x\| > 0.95 or \|y\| > 0.95) |
@@ -168,7 +168,7 @@ The reward structure combines sparse success signals with dense shaping:
 #### Energy Costs (when enabled)
 
 | Event        | Cost                             |        |            |
-|--------------|----------------------------------|--------|------------|
+| ------------ | -------------------------------- | ------ | ---------- |
 | **Movement** | `0.01 ×                          | action | ` per step |
 | **Idle**     | `0.001` per step                 |        |            |
 | **Depleted** | Action scaled to 0 (cannot move) |        |            |
@@ -178,7 +178,7 @@ The reward structure combines sparse success signals with dense shaping:
 Each agent receives a **local observation vector** with partial observability:
 
 | Component           | Dimensions               | Description                                          |
-|---------------------|--------------------------|------------------------------------------------------|
+| ------------------- | ------------------------ | ---------------------------------------------------- |
 | Self velocity       | 2                        | `[vx, vy]`                                           |
 | Self position       | 2                        | `[x, y]` in `[-1, 1]`                                |
 | Agent ID            | `num_rescuers`           | One-hot encoding for symmetry breaking               |
@@ -202,7 +202,7 @@ obs_dim = 2 + 2 + 6 + 1 + (9 × 5) + (12 × 4) + (5 × 3) = 119
 ### Action Space
 
 | Mode                     | Space         | Description                   |
-|--------------------------|---------------|-------------------------------|
+| ------------------------ | ------------- | ----------------------------- |
 | **Continuous** (default) | `Box[-1, 1]²` | 2D acceleration vector        |
 | **Discrete**             | `Discrete(5)` | {noop, up, down, left, right} |
 
@@ -219,7 +219,7 @@ x_{t+1} = x_t + v_{t+1}
 Agents operate under energy constraints requiring strategic resource management:
 
 | Parameter             | Default | Description                        |
-|-----------------------|---------|------------------------------------|
+| --------------------- | ------- | ---------------------------------- |
 | `max_energy`          | 1.0     | Full energy capacity               |
 | `movement_cost_coeff` | 0.01    | Cost scales with action magnitude  |
 | `idle_cost`           | 0.001   | Base cost per step                 |
@@ -236,7 +236,7 @@ When energy reaches zero, agents cannot move (`energy_depleted_action_scale = 0.
 ### Continuous vs. Discrete Control
 
 | Metric                   | Continuous | Discrete |
-|--------------------------|------------|----------|
+| ------------------------ | ---------- | -------- |
 | **Rescue %**             | Higher     | Lower    |
 | **Sample Efficiency**    | Moderate   | Higher   |
 | **Fine-grained Control** | ✓          | ✗        |
@@ -247,7 +247,7 @@ When energy reaches zero, agents cannot move (`energy_depleted_action_scale = 0.
 ### Curriculum vs. No Curriculum
 
 | Configuration          | Dense Map (8 trees) Performance              |
-|------------------------|----------------------------------------------|
+| ---------------------- | -------------------------------------------- |
 | **With Curriculum**    | Agents successfully navigate and rescue      |
 | **Without Curriculum** | Agents fail to solve — stuck in local optima |
 
@@ -262,6 +262,56 @@ When energy reaches zero, agents cannot move (`energy_depleted_action_scale = 0.
 - Early stages (0-2 trees) provide dense reward signal for basic navigation
 - Progressive difficulty allows transfer of learned behaviors
 - Final stage performance matches or exceeds single-stage training on easy environments
+
+### Ablation Studies
+
+We conducted ablation studies to analyze the impact of key hyperparameters on agent performance. All experiments used `total_timesteps=1024000` and `seed=13` with base configuration from `config.yaml`.
+
+**Tracked Metrics:**
+
+- **Rescues (%)** — Percentage of victims successfully delivered to matching zones
+- **Collision Count** — Total tree + agent collisions per episode
+- **Coverage (cells)** — Unique grid cells visited (exploration metric)
+
+#### Vision Radius Ablation
+
+Comparing wide vs. narrow field of view:
+
+```bash
+# Wide vision (default-like)
+python -m src.main train.active=true env.vision_radius=0.5
+
+# Narrow vision (restricted)
+python -m src.main train.active=true env.vision_radius=0.1333
+```
+
+| Metric          | vision_radius=0.5 | vision_radius=0.1333 |
+| --------------- | ----------------- | -------------------- |
+| **Rescues (%)** | _TBD_             | _TBD_                |
+| **Collisions**  | _TBD_             | _TBD_                |
+| **Coverage**    | _TBD_             | _TBD_                |
+
+<!-- TODO: Add vision radius ablation plot -->
+
+#### N Closest Landmarks Ablation
+
+Comparing rich vs. sparse landmark observations:
+
+```bash
+# Rich landmark info (default)
+python -m src.main train.active=true env.n_closest_landmarks=9
+
+# Sparse landmark info
+python -m src.main train.active=true env.n_closest_landmarks=3
+```
+
+| Metric          | n_closest_landmarks=9 | n_closest_landmarks=3 |
+| --------------- | --------------------- | --------------------- |
+| **Rescues (%)** | _TBD_                 | _TBD_                 |
+| **Collisions**  | _TBD_                 | _TBD_                 |
+| **Coverage**    | _TBD_                 | _TBD_                 |
+
+<!-- TODO: Add n_closest_landmarks ablation plot -->
 
 ### Failure Modes
 
@@ -295,7 +345,7 @@ When energy reaches zero, agents cannot move (`energy_depleted_action_scale = 0.
 Three primary metrics are tracked and logged to TensorBoard:
 
 | Metric              | Description                                                    | Ideal Value |
-|---------------------|----------------------------------------------------------------|-------------|
+| ------------------- | -------------------------------------------------------------- | ----------- |
 | **Rescue %**        | Percentage of victims successfully delivered to matching zones | 100%        |
 | **Collision Count** | Total tree + agent collisions per episode                      | 0           |
 | **Coverage**        | Unique grid cells visited (exploration metric)                 | High        |
@@ -377,7 +427,7 @@ python -m src.main train.active=true env.rescuers=8 curriculum.enabled=false
 This project was developed as part of the **ELTE Collective Intelligence Course (Assignment 2)**.
 
 | Member                 | Contributions                                                                                                                                                                                             |
-|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Adorján Nagy-Mohos** | TorchRL migration, Curriculum learning, CTDE/MAPPO architecture, Hydra + Docker integration, Victim dynamics, Scenario generation, Vision system (occlusion logic fix), Continuous control implementation |
 | **Máté Kovács**        | Infrastructure (TensorBoard logging), Testing suite, Documentation (LaTeX/Docstrings), README.md, Metrics analysis,                                                                                       |
 | **Sándor Baranyi**     | Vision system (N-closest landmark), Ablation studies, Energy budget features, Bounded Box observation space, Victim dynamics                                                                              |
