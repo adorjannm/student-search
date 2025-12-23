@@ -48,9 +48,9 @@ class CurriculumScheduler:
 
         # Calculate iterations per stage
         if total_iterations is not None:
-            self.iterations_per_stage = total_iterations // num_stages
+            self.iterations_per_stage = max(1, total_iterations // num_stages)
         else:
-            self.iterations_per_stage = iterations_per_stage
+            self.iterations_per_stage = max(1, iterations_per_stage)
 
         self.current_iteration = 0
         self.current_stage = 0
